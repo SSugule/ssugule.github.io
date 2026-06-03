@@ -1,0 +1,6 @@
+{
+  "name": "Sugule Database",
+  "description": "Premium booru-style Media Database & Gallery with private passcode lock screen, clean Russian interface, and direct Supabase Cloud storage/comment integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
