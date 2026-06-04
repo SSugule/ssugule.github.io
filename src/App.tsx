@@ -50,6 +50,7 @@ import {
 import { Post, Tag, Comment } from './types';
 import { dbManager } from './supabaseClient';
 import { INITIAL_POSTS, INITIAL_TAGS } from './sampleData';
+import { motion } from 'motion/react';
 
 // Helper to determine if a URL represents a video file
 const isUrlVideo = (url: string) => {
@@ -81,20 +82,57 @@ const isUrlDownloadable = (url: string) => {
 export default function App() {
   // Passcode verification state
   const [passcode, setPasscode] = useState('');
-  const [isAuthorized, setIsAuthorized] = useState(() => {
-    return localStorage.getItem('sugule_authorized') === 'true';
-  });
+  const [isAuthorized, setIsAuthorized] = useState(true);
   const [passcodeError, setPasscodeError] = useState('');
 
   // Main application data states
   const [posts, setPosts] = useState<Post[]>(INITIAL_POSTS);
-  const [tags, setTags] = useState<Tag[]>(INITIAL_TAGS);
+  const [tags, setTagsState] = useState<Tag[]>(() => {
+    const seen = new Set<string>();
+    return INITIAL_TAGS.filter(t => {
+      const nameLower = t.name.toLowerCase().trim();
+      if (!nameLower || seen.has(nameLower)) return false;
+      seen.add(nameLower);
+      return true;
+    });
+  });
+
+  const setTags = (value: Tag[] | ((prev: Tag[]) => Tag[])) => {
+    const deduplicateTags = (list: Tag[]): Tag[] => {
+      if (!list) return [];
+      const seen = new Set<string>();
+      return list.filter(t => {
+        const nameLower = t.name.toLowerCase().trim();
+        if (!nameLower || seen.has(nameLower)) return false;
+        seen.add(nameLower);
+        return true;
+      });
+    };
+
+    if (typeof value === 'function') {
+      setTagsState(prev => deduplicateTags(value(prev)));
+    } else {
+      setTagsState(deduplicateTags(value));
+    }
+  };
+
   const [favorites, setFavorites] = useState<string[]>([]);
   const [activeTab, setActiveTab ] = useState<'gallery' | 'upload'>('gallery');
   const [middleFilterTab, setMiddleFilterTab] = useState<'all' | 'arts' | 'videos' | 'comics' | 'games'>('all');
   
   // Search & Filtering
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedTags, setSelectedTagsState] = useState<string[]>([]);
+  const setSelectedTags = (value: string[] | ((prev: string[]) => string[])) => {
+    const deduplicate = (list: string[]): string[] => {
+      if (!list) return [];
+      return Array.from(new Set(list));
+    };
+    if (typeof value === 'function') {
+      setSelectedTagsState(prev => deduplicate(value(prev)));
+    } else {
+      setSelectedTagsState(deduplicate(value));
+    }
+  };
   const [tagInputText, setTagInputText] = useState('');
   const [showTagSuggestions, setShowTagSuggestions] = useState(false);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
@@ -172,6 +210,12 @@ export default function App() {
   // Comic specific upload file items
   const [comicFiles, setComicFiles] = useState<{ name: string; state: 'idle' | 'uploading' | 'success' | 'error'; url?: string; size?: string; thumbnail?: string }[]>([]);
 
+  // Page transitioning direction and tag specifying fields
+  const [slideDirection, setSlideDirection] = useState<'forward' | 'backward'>('forward');
+  const [newCustomTagName, setNewCustomTagName] = useState('');
+  const [newCustomTagCategory, setNewCustomTagCategory] = useState<'character' | 'copyright' | 'artist' | 'general' | 'meta'>('general');
+  const [tagRegSuccessMsg, setTagRegSuccessMsg] = useState('');
+
   // File upload state for Supabase storage
   const [dragActive, setDragActive] = useState(false);
   const [uploadFileState, setUploadFileState] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
@@ -187,49 +231,81 @@ export default function App() {
     url: '',
     key: ''
   });
-  const [setupUrl, setSetupUrl] = useState('');
-  const [setupKey, setSetupKey] = useState('');
-  const [consoleMsg, setConsoleMsg] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [isLoadingDb, setIsLoadingDb] = useState(false);
 
   // Authenticate and load configs on mounts
   useEffect(() => {
-    // Load Supabase specs
-    const conf = dbManager.getConfiguration();
-    setSupabaseConfig(conf);
-    setSetupUrl(conf.url);
-    setSetupKey(conf.key);
-
-    const savedViews = localStorage.getItem('sugule_recent_views');
-    if (savedViews) {
+    const autoConfigureDb = async () => {
       try {
-        setRecentlyViewed(JSON.parse(savedViews));
-      } catch (e) {
-        // Ignored
+        const resp = await fetch('/api/supabase-config');
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.url && data.key) {
+            // Save configuration & reinitialize client
+            dbManager.saveConfiguration(data.url, data.key);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to auto-configure Supabase credentials on load:', err);
       }
-    }
 
-    if (isAuthorized) {
-      loadDatabase();
-    }
+      // Load Supabase specs
+      const conf = dbManager.getConfiguration();
+      setSupabaseConfig(conf);
+
+      const savedViews = localStorage.getItem('sugule_recent_views');
+      if (savedViews) {
+        try {
+          setRecentlyViewed(JSON.parse(savedViews));
+        } catch (e) {
+          // Ignored
+        }
+      }
+
+      if (isAuthorized) {
+        loadDatabase();
+      }
+    };
+
+    autoConfigureDb();
   }, [isAuthorized]);
 
-  const loadDatabase = async () => {
-    setIsLoadingDb(true);
+  // Periodic polling to auto-update posts silently in the background
+  useEffect(() => {
+    if (!isAuthorized) return;
+    
+    // Check and refresh database every 8 seconds silently for real-time consistency
+    const pollInterval = setInterval(() => {
+      loadDatabase(true);
+    }, 8000);
+
+    return () => clearInterval(pollInterval);
+  }, [isAuthorized]);
+
+  const loadDatabase = async (silent = false) => {
+    if (!silent) setIsLoadingDb(true);
     try {
       const fetchedPosts = await dbManager.getPosts();
       const fetchedTags = await dbManager.getTags();
       const fetchedFavs = await dbManager.getFavorites();
       
-      setPosts(fetchedPosts && fetchedPosts.length > 0 ? fetchedPosts : INITIAL_POSTS);
-      setTags(fetchedTags && fetchedTags.length > 0 ? fetchedTags : INITIAL_TAGS);
+      const config = dbManager.getConfiguration();
+      if (config.isEnabled) {
+        setPosts(fetchedPosts || []);
+        setTags(fetchedTags || []);
+      } else {
+        setPosts(fetchedPosts && fetchedPosts.length > 0 ? fetchedPosts : INITIAL_POSTS);
+        setTags(fetchedTags && fetchedTags.length > 0 ? fetchedTags : INITIAL_TAGS);
+      }
       setFavorites(fetchedFavs || []);
     } catch (e) {
       console.error('Error fetching data from Supabase:', e);
-      setPosts(INITIAL_POSTS);
-      setTags(INITIAL_TAGS);
+      if (!silent) {
+        setPosts(INITIAL_POSTS);
+        setTags(INITIAL_TAGS);
+      }
     } finally {
-      setIsLoadingDb(false);
+      if (!silent) setIsLoadingDb(false);
     }
   };
 
@@ -284,9 +360,18 @@ export default function App() {
     const general: Tag[] = [];
     const meta: Tag[] = [];
 
+    const seenNames = new Set<string>();
+
     tags.forEach(t => {
-      const count = posts.filter(p => p.tags.includes(t.name)).length;
-      const tagWithCount = { ...t, count };
+      const lowerName = t.name.toLowerCase().trim();
+      if (!lowerName || seenNames.has(lowerName)) return;
+      seenNames.add(lowerName);
+
+      const count = posts.filter(p => 
+        p.tags.some(pt => pt.toLowerCase().trim() === lowerName)
+      ).length;
+
+      const tagWithCount = { ...t, name: lowerName, count };
       
       switch (t.category) {
         case 'character': character.push(tagWithCount); break;
@@ -313,6 +398,34 @@ export default function App() {
     const terms = tagInputText.split(/\s+/);
     return terms[terms.length - 1] || '';
   };
+
+  const sortedTags = useMemo(() => {
+    const counts: Record<string, number> = {};
+    
+    tags.forEach(t => {
+      counts[t.name.trim().toLowerCase()] = 0;
+    });
+
+    posts.forEach(p => {
+      if (p.tags && Array.isArray(p.tags)) {
+        p.tags.forEach(tName => {
+          const clean = tName.trim().toLowerCase();
+          if (clean) {
+            counts[clean] = (counts[clean] || 0) + 1;
+          }
+        });
+      }
+    });
+
+    return [...tags].sort((a, b) => {
+      const countA = counts[a.name.trim().toLowerCase()] || 0;
+      const countB = counts[b.name.trim().toLowerCase()] || 0;
+      if (countB !== countA) {
+        return countB - countA;
+      }
+      return a.name.localeCompare(b.name);
+    });
+  }, [tags, posts]);
 
   // Tag search query suggestions mapping matching the current word typed
   const filteredSuggestions = useMemo(() => {
@@ -661,6 +774,15 @@ export default function App() {
     }
   };
 
+  const changeComicPage = (newPage: number) => {
+    if (newPage > currentComicPage) {
+      setSlideDirection('forward');
+    } else {
+      setSlideDirection('backward');
+    }
+    setCurrentComicPage(newPage);
+  };
+
   // Keyboard layout keydown bindings for gallery and comics page flip
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -674,7 +796,7 @@ export default function App() {
       if (e.key === 'ArrowLeft') {
         if (isPostComic(selectedPost)) {
           if (currentComicPage > 0) {
-            setCurrentComicPage(prev => prev - 1);
+            changeComicPage(currentComicPage - 1);
           } else {
             handlePrevPost();
           }
@@ -685,7 +807,7 @@ export default function App() {
         if (isPostComic(selectedPost)) {
           const pages = getComicPages(selectedPost);
           if (currentComicPage < pages.length - 1) {
-            setCurrentComicPage(prev => prev + 1);
+            changeComicPage(currentComicPage + 1);
           } else {
             handleNextPost();
           }
@@ -701,14 +823,14 @@ export default function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [selectedPost, currentComicPage, posts, selectedTags]);
+  }, [selectedPost, currentComicPage, posts, selectedTags, slideDirection]);
 
   const handleNextAction = () => {
     if (!selectedPost) return;
     if (isPostComic(selectedPost)) {
       const pages = getComicPages(selectedPost);
       if (currentComicPage < pages.length - 1) {
-        setCurrentComicPage(prev => prev + 1);
+        changeComicPage(currentComicPage + 1);
       } else {
         handleNextPost();
       }
@@ -721,7 +843,7 @@ export default function App() {
     if (!selectedPost) return;
     if (isPostComic(selectedPost)) {
       if (currentComicPage > 0) {
-        setCurrentComicPage(prev => prev - 1);
+        changeComicPage(currentComicPage - 1);
       } else {
         handlePrevPost();
       }
@@ -747,6 +869,67 @@ export default function App() {
       }
     }
     setTouchStartX(null);
+  };
+
+  const handleMoveFileUp = (idx: number) => {
+    if (idx === 0) return;
+    setComicFiles(prev => {
+      const updated = [...prev];
+      const temp = updated[idx];
+      updated[idx] = updated[idx - 1];
+      updated[idx - 1] = temp;
+      
+      const successfulUrls = updated.filter(f => f.state === 'success' && f.url).map(f => f.url!);
+      if (successfulUrls.length > 0) {
+        setUploadUrl(JSON.stringify(successfulUrls));
+      }
+      return updated;
+    });
+  };
+
+  const handleMoveFileDown = (idx: number) => {
+    setComicFiles(prev => {
+      if (idx === prev.length - 1) return prev;
+      const updated = [...prev];
+      const temp = updated[idx];
+      updated[idx] = updated[idx + 1];
+      updated[idx + 1] = temp;
+      
+      const successfulUrls = updated.filter(f => f.state === 'success' && f.url).map(f => f.url!);
+      if (successfulUrls.length > 0) {
+        setUploadUrl(JSON.stringify(successfulUrls));
+      }
+      return updated;
+    });
+  };
+
+  const handleRegisterCustomTag = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newCustomTagName.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!name) return;
+
+    try {
+      await dbManager.saveTag(name, newCustomTagCategory);
+      
+      const newTagObj: Tag = { name, category: newCustomTagCategory, count: 1 };
+      setTags(prev => {
+        const filtered = prev.filter(t => t.name.toLowerCase() !== name.toLowerCase());
+        return [...filtered, newTagObj];
+      });
+
+      setUploadTagsString(prev => {
+        const cleanPrev = prev.trim();
+        const currentTerms = cleanPrev.split(/[\s,]+/).map(t => t.trim().toLowerCase()).filter(Boolean);
+        if (currentTerms.includes(name)) return prev;
+        return cleanPrev ? `${cleanPrev} ${name}` : name;
+      });
+
+      setTagRegSuccessMsg(`Тег "${name}" успешно создан как ${newCustomTagCategory}!`);
+      setNewCustomTagName('');
+      setTimeout(() => setTagRegSuccessMsg(''), 3500);
+    } catch (err: any) {
+      console.error('Failed to register custom tag:', err);
+    }
   };
 
   const handleToggleFavorite = async (postId: string) => {
@@ -1038,43 +1221,6 @@ export default function App() {
     } finally {
       setIsSavingPost(false);
     }
-  };
-
-  // Supabase save parameters connection
-  const handleSaveConnection = (e: React.FormEvent) => {
-    e.preventDefault();
-    setConsoleMsg(null);
-    
-    if (!setupUrl.trim() || !setupKey.trim()) {
-      setConsoleMsg({ text: 'Укажите URL проекта и публичный токен (Anon Key).', type: 'error' });
-      return;
-    }
-
-    const success = dbManager.saveConfiguration(setupUrl, setupKey);
-    const latestConf = dbManager.getConfiguration();
-    setSupabaseConfig(latestConf);
-
-    if (success) {
-      setConsoleMsg({ text: '🟢 Соединение успешно установлено! База данных подключена.', type: 'success' });
-      loadDatabase();
-    } else {
-      setConsoleMsg({ text: 'Ошибка инициализации клиента. Проверьте правильность ссылок.', type: 'error' });
-    }
-  };
-
-  const handleDisconnect = () => {
-    dbManager.disconnectSupabase();
-    setSupabaseConfig({ isEnabled: false, url: '', key: '' });
-    setSetupUrl('');
-    setSetupKey('');
-    setConsoleMsg({ text: '🔴 Подключение разорвано. База данных отключена.', type: 'info' });
-    setPosts([]);
-    setTags([]);
-  };
-
-  // Pre-fill user-supplied token directly to help them on Point 4
-  const fillUserPreconfiguredKey = () => {
-    setSetupKey('sb_secret_2tC5crIRKxtTUAAkzXvZ7g_7LMHI0d-');
   };
 
   // Render individual tag with rule34 aesthetics
@@ -1408,49 +1554,42 @@ export default function App() {
                   <span className="text-zinc-200 font-sans text-[13px] font-bold block ml-0.5">Hot tags</span>
                   
                   <div className="flex flex-wrap gap-2">
-                    {/* Default 10 tags shown in image */}
-                    {[
-                      { id: 'video', name: 'video' },
-                      { id: 'roblox', name: 'roblox' },
-                      { id: 'zenless_zone_zero', name: 'zenless zone zero' },
-                      { id: 'maplestar', name: 'maplestar' },
-                      { id: 'femboy', name: 'femboy' },
-                      { id: 'genshin_impact', name: 'genshin impact' },
-                      { id: 'd-art', name: 'd-art' },
-                      { id: 'brawl_stars', name: 'brawl stars' },
-                      { id: 'anna_anon', name: 'anna anon' },
-                      { id: 'pokemon', name: 'pokemon' }
-                    ].map(tagItem => {
-                      const isActive = selectedTags.some(t => t.toLowerCase() === tagItem.id || t.toLowerCase() === '-' + tagItem.id);
+                    {/* Dynamic usage-sorted tags shown recursively */}
+                    {sortedTags.slice(0, 10).map(tagItem => {
+                      const isActive = selectedTags.some(t => t.toLowerCase() === tagItem.name.toLowerCase() || t.toLowerCase() === '-' + tagItem.name.toLowerCase());
+                      const useCount = posts.filter(p => p.tags && p.tags.some(t => t.toLowerCase() === tagItem.name.toLowerCase())).length;
                       return (
                         <button
-                          key={tagItem.id}
-                          onClick={() => handleToggleHotTag(tagItem.id)}
-                          className={`px-3.5 py-1.5 rounded-full text-xs font-semibold select-none transition border border-transparent cursor-pointer ${
+                          key={tagItem.name}
+                          onClick={() => handleToggleHotTag(tagItem.name)}
+                          className={`px-3 py-1.5 rounded-full text-xs font-semibold select-none transition border border-transparent cursor-pointer flex items-center gap-1 ${
                             isActive 
                               ? 'ring-2 ring-white/60 bg-purple-650 text-white' 
-                              : getHotTagColor(tagItem.id)
+                              : getHotTagColor(tagItem.name)
                           }`}
                         >
-                          {tagItem.name}
+                          <span>{tagItem.name.replace(/_/g, ' ')}</span>
+                          <span className="opacity-50 text-[9px] font-mono">({useCount})</span>
                         </button>
                       );
                     })}
 
                     {/* expansion options */}
-                    {showMoreHotTags && tags.filter(t => !['video', 'roblox', 'zenless_zone_zero', 'maplestar', 'femboy', 'genshin_impact', 'd-art', 'brawl_stars', 'anna_anon', 'pokemon'].includes(t.name)).slice(0, 10).map(tag => {
-                      const isActive = selectedTags.some(t => t.toLowerCase() === tag.name || t.toLowerCase() === '-' + tag.name);
+                    {showMoreHotTags && sortedTags.slice(10, 30).map(tagItem => {
+                      const isActive = selectedTags.some(t => t.toLowerCase() === tagItem.name.toLowerCase() || t.toLowerCase() === '-' + tagItem.name.toLowerCase());
+                      const useCount = posts.filter(p => p.tags && p.tags.some(t => t.toLowerCase() === tagItem.name.toLowerCase())).length;
                       return (
                         <button
-                          key={tag.name}
-                          onClick={() => handleToggleHotTag(tag.name)}
-                          className={`px-3.5 py-1.5 rounded-full text-xs font-semibold select-none transition border border-transparent cursor-pointer ${
+                          key={tagItem.name}
+                          onClick={() => handleToggleHotTag(tagItem.name)}
+                          className={`px-3 py-1.5 rounded-full text-xs font-semibold select-none transition border border-transparent cursor-pointer flex items-center gap-1 ${
                             isActive 
-                              ? 'ring-2 ring-white/60 bg-purple-650 text-white' 
-                              : 'bg-[#292a30] text-zinc-300 hover:bg-[#34363d]'
+                              ? 'ring-2 ring-white/60 bg-purple-655 text-white' 
+                              : 'bg-[#292a30] text-zinc-300 hover:bg-[#34363d] flex items-center gap-1'
                           }`}
                         >
-                          {tag.name.replace(/_/g, ' ')}
+                          <span>{tagItem.name.replace(/_/g, ' ')}</span>
+                          <span className="opacity-50 text-[9px] font-mono">({useCount})</span>
                         </button>
                       );
                     })}
@@ -1462,7 +1601,7 @@ export default function App() {
                     onClick={() => setShowMoreHotTags(!showMoreHotTags)}
                     className="text-xs font-semibold text-zinc-400 hover:text-white transition block ml-0.5 pt-1 focus:outline-none cursor-pointer"
                   >
-                    {showMoreHotTags ? 'Show less' : 'Show more (+10)'}
+                    {showMoreHotTags ? 'Show less' : 'Show more (+20)'}
                   </button>
                 </div>
               </div>
@@ -1851,7 +1990,7 @@ export default function App() {
             {/* MAIN ARCHIVE GRID DISPLAY & SEARCH INPUT */}
             <section className="col-span-12 space-y-6">
               {selectedPost ? (
-                <div className="fixed inset-0 z-50 bg-[#07080a]/98 flex flex-col md:flex-row select-text animate-fadeIn overflow-hidden">
+                <div className="fixed inset-0 z-50 bg-[#07080a]/98 flex flex-col md:flex-row select-text animate-fadeIn overflow-y-auto md:overflow-hidden">
                   {/* Large close button in the top right, styled with dark green and lime details */}
                   <button 
                     onClick={() => setSelectedPost(null)}
@@ -1862,7 +2001,7 @@ export default function App() {
                   </button>
 
                   {/* LEFT SIDEBAR: Tag listings and info */}
-                  <div className="w-full md:w-80 border-r border-[#1a1b26] bg-[#07080a] h-full flex flex-col shrink-0 overflow-y-auto select-none p-4 custom-scrollbar space-y-5">
+                  <div className="w-full md:w-80 border-t md:border-t-0 md:border-r border-[#1a1b26] bg-[#07080a] h-auto md:h-full flex flex-col shrink-0 md:overflow-y-auto select-none p-4 custom-scrollbar space-y-5 order-2 md:order-1">
                     {/* Brief title */}
                     <div className="flex items-center gap-2 pb-3 border-b border-[#141520]">
                       <Database className="w-4.5 h-4.5 text-violet-500" />
@@ -2092,13 +2231,13 @@ export default function App() {
                   </div>
 
                   {/* RIGHT CONTENT COLUMN Opening */}
-                  <div className="flex-grow h-full overflow-y-auto flex flex-col items-center justify-start p-4 md:p-8 bg-[#040508] relative select-none">
+                  <div className="flex-grow h-auto md:h-full md:overflow-y-auto flex flex-col items-center justify-start p-4 md:p-8 bg-[#040508] relative select-none order-1 md:order-2 w-full">
                     
                     {/* Media Viewer Frame */}
                     <div 
                       onTouchStart={handleTouchStart}
                       onTouchEnd={handleTouchEnd}
-                      className="bg-black/90 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[420px] max-h-[720px] overflow-hidden group select-none shadow-2xl shadow-black/80 max-w-4xl w-full"
+                      className="bg-black/90 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[300px] sm:min-h-[420px] max-h-[720px] overflow-hidden group select-none shadow-2xl shadow-black/80 max-w-4xl w-full"
                     >
                         {/* Interactive nav chevrons on sides */}
                         <button 
@@ -2108,18 +2247,22 @@ export default function App() {
                           <ChevronLeft className="w-5 h-5" />
                         </button>
 
-                        <div className="w-full flex-grow flex items-center justify-center relative min-h-[360px]">
-                          {/* Left / Right active overlay flip zones */}
-                          <div 
-                            onClick={(e) => { e.stopPropagation(); handlePrevAction(); }}
-                            className="absolute top-0 left-0 w-1/4 h-full cursor-w-resize z-20 hover:bg-gradient-to-r hover:from-white/[0.005] hover:to-transparent"
-                            title="Предыдущий (Клик)"
-                          />
-                          <div 
-                            onClick={(e) => { e.stopPropagation(); handleNextAction(); }}
-                            className="absolute top-0 right-0 w-1/4 h-full cursor-e-resize z-20 hover:bg-gradient-to-l hover:from-white/[0.005] hover:to-transparent"
-                            title="Следующий (Клик)"
-                          />
+                        <div className="w-full flex-grow flex items-center justify-center relative min-h-[260px] sm:min-h-[360px]">
+                          {/* Left / Right active overlay flip zones (DISABLED FOR VIDEOS) */}
+                          {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && (
+                            <>
+                              <div 
+                                onClick={(e) => { e.stopPropagation(); handlePrevAction(); }}
+                                className="absolute top-0 left-0 w-1/4 h-full cursor-w-resize z-20 hover:bg-gradient-to-r hover:from-white/[0.005] hover:to-transparent"
+                                title="Предыдущий (Клик)"
+                              />
+                              <div 
+                                onClick={(e) => { e.stopPropagation(); handleNextAction(); }}
+                                className="absolute top-0 right-0 w-1/4 h-full cursor-e-resize z-20 hover:bg-gradient-to-l hover:from-white/[0.005] hover:to-transparent"
+                                title="Следующий (Клик)"
+                              />
+                            </>
+                          )}
 
                           {isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) ? (
                             <video 
@@ -2154,8 +2297,11 @@ export default function App() {
                               </a>
                             </div>
                           ) : (
-                            <img 
-                              key={isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url}
+                            <motion.img 
+                              key={isPostComic(selectedPost) ? `comic-page-${currentComicPage}-${selectedPost.id}` : selectedPost.id}
+                              initial={isPostComic(selectedPost) ? { x: slideDirection === 'forward' ? 100 : -100, opacity: 0 } : false}
+                              animate={{ x: 0, opacity: 1 }}
+                              transition={{ duration: 0.28, ease: 'easeOut' }}
                               src={isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url} 
                               alt={selectedPost.title} 
                               referrerPolicy="no-referrer"
@@ -2406,7 +2552,7 @@ export default function App() {
                 {selectedTags.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5 items-center bg-[#0d0e11] p-2.5 rounded-lg border border-zinc-800/80">
                     <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-mono shrink-0 mr-1.5 font-bold">Активные фильтры:</span>
-                    {selectedTags.map(tag => renderTagBadge(tag, false, () => handleRemoveSearchTag(tag)))}
+                    {(Array.from(new Set(selectedTags)) as string[]).map(tag => renderTagBadge(tag, false, () => handleRemoveSearchTag(tag)))}
                     <button
                       type="button"
                       onClick={() => {
@@ -2430,24 +2576,6 @@ export default function App() {
                 <div className="p-12 text-center bg-[#121318] border border-zinc-800 rounded-xl space-y-4">
                   <RefreshCw className="w-8 h-8 text-emerald-400 animate-spin mx-auto" />
                   <p className="text-xs text-zinc-500 font-mono">Загрузка карточек из бэкенда Supabase...</p>
-                </div>
-              ) : !supabaseConfig.isEnabled ? (
-                <div className="p-12 text-center bg-[#121318] border border-zinc-800 rounded-xl space-y-6">
-                  <div className="w-12 h-12 bg-red-950/20 rounded-full flex items-center justify-center mx-auto border border-red-900/40">
-                    <AlertTriangle className="w-6 h-6 text-red-400" />
-                  </div>
-                  <div className="space-y-2 max-w-md mx-auto">
-                    <h3 className="font-semibold text-sm text-zinc-200 uppercase font-mono tracking-wider">База данных не подключена</h3>
-                    <p className="text-xs text-zinc-400 leading-relaxed">
-                      Чтобы просматривать медиафайлы, отправлять оценки и комментарии, необходимо настроить подключение к вашему проекту Supabase во вкладке <strong>Настройка БД</strong>.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setActiveTab('console')}
-                    className="text-xs font-mono bg-emerald-950/50 hover:bg-emerald-900 border border-emerald-900 text-emerald-300 px-6 py-2 rounded-lg transition"
-                  >
-                    Перейти к настройке подключения
-                  </button>
                 </div>
               ) : getFilteredPosts().length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -2674,6 +2802,47 @@ export default function App() {
                       className="w-full bg-[#0a0b12] border border-zinc-850 focus:border-purple-500 rounded-xl px-4 py-3 text-white focus:outline-none placeholder-zinc-500 font-sans text-sm"
                     />
                   </div>
+
+                  {/* Custom tag registration utility */}
+                  <div className="bg-[#050608] border border-zinc-900 rounded-xl p-3.5 space-y-2 mt-4 select-none">
+                    <span className="text-[10px] font-mono tracking-wider uppercase font-bold text-zinc-400 block pb-0.5">Создать тег с категорией</span>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <input 
+                        type="text"
+                        value={newCustomTagName}
+                        onChange={(e) => setNewCustomTagName(e.target.value)}
+                        placeholder="Название (например: miku)"
+                        className="bg-black/40 border border-zinc-850 hover:border-zinc-800 focus:border-purple-500 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none"
+                      />
+                      
+                      <select
+                        value={newCustomTagCategory}
+                        onChange={(e) => setNewCustomTagCategory(e.target.value as any)}
+                        className="bg-black/40 border border-zinc-850 focus:border-purple-500 rounded-lg px-2 py-1.5 text-xs text-zinc-300 outline-none cursor-pointer"
+                      >
+                        <option value="general" className="bg-[#121316]">general (обычный)</option>
+                        <option value="character" className="bg-[#121316]">character (персонаж)</option>
+                        <option value="copyright" className="bg-[#121316]">copyright (франшиза)</option>
+                        <option value="artist" className="bg-[#121316]">artist (автор)</option>
+                        <option value="meta" className="bg-[#121316]">meta (метаданные)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <button
+                        type="button"
+                        onClick={handleRegisterCustomTag}
+                        className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-zinc-800 hover:border-purple-500 rounded-lg text-[10px] font-bold font-mono tracking-wider uppercase cursor-pointer transition animate-fadeIn"
+                      >
+                        Добавить тег в базу
+                      </button>
+
+                      {tagRegSuccessMsg && (
+                        <span className="text-[10px] text-emerald-400 font-mono animate-fadeIn">{tagRegSuccessMsg}</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
               </div>
@@ -2720,11 +2889,36 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Status Label on the right */}
-                        <div className="shrink-0 text-[10px] font-mono font-bold">
-                          {f.state === 'uploading' && <span className="text-amber-500 animate-pulse">UPLOADING...</span>}
-                          {f.state === 'success' && <span className="text-emerald-400">SUCCESS</span>}
-                          {f.state === 'error' && <span className="text-rose-500">ERROR</span>}
+                        {/* Status Label & Reordering Actions on the right */}
+                        <div className="flex items-center gap-3 shrink-0 select-none">
+                          {comicFiles.length > 1 && (
+                            <div className="flex items-center gap-1 font-mono text-[9px]">
+                              <button
+                                type="button"
+                                onClick={() => handleMoveFileUp(idx)}
+                                disabled={idx === 0}
+                                className="px-2 py-1 bg-zinc-900 hover:bg-zinc-850 disabled:opacity-20 border border-zinc-800 text-zinc-400 hover:text-white rounded transition cursor-pointer disabled:cursor-not-allowed"
+                                title="Переместить вверх"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleMoveFileDown(idx)}
+                                disabled={idx === comicFiles.length - 1}
+                                className="px-2 py-1 bg-zinc-900 hover:bg-zinc-850 disabled:opacity-20 border border-zinc-800 text-zinc-400 hover:text-white rounded transition cursor-pointer disabled:cursor-not-allowed"
+                                title="Переместить вниз"
+                              >
+                                ▼
+                              </button>
+                            </div>
+                          )}
+
+                          <div className="text-[10px] font-mono font-bold">
+                            {f.state === 'uploading' && <span className="text-amber-500 animate-pulse">UPLOADING...</span>}
+                            {f.state === 'success' && <span className="text-emerald-400">SUCCESS</span>}
+                            {f.state === 'error' && <span className="text-rose-500">ERROR</span>}
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -2734,6 +2928,17 @@ export default function App() {
                 {uploadErrorMsg && (
                   <div className="p-3 bg-red-950/20 border border-red-900/40 text-red-300 rounded-xl text-xs font-mono">
                     🔴 Ошибка: {uploadErrorMsg}
+                  </div>
+                )}
+
+                {uploadUrl && (
+                  <div className="p-4 bg-emerald-950/20 border border-emerald-900/40 text-emerald-300 rounded-xl text-xs space-y-1.5 font-sans leading-relaxed select-text">
+                    <p className="font-bold flex items-center gap-1.5 text-emerald-200">
+                      <span className="text-sm">🟢</span> Файл успешно загружен в облачное хранилище Supabase!
+                    </p>
+                    <p className="text-[10.5px] text-zinc-400">
+                      Медиафайл сохранен в бакете <code className="bg-zinc-950 px-1.5 py-0.5 rounded text-rose-400 font-mono font-bold">media</code> вашего проекта Supabase и готов к постоянной публикации без риска удаления.
+                    </p>
                   </div>
                 )}
 
@@ -3169,18 +3374,22 @@ export default function App() {
                   </button>
 
                   <div className="w-full flex-grow flex items-center justify-center relative min-h-[300px]">
-                    {/* Left & Right active overlay flip zones */}
-                    <div 
-                      onClick={(e) => { e.stopPropagation(); handlePrevAction(); }}
-                      className={`absolute top-0 left-0 w-1/2 h-full cursor-w-resize z-20 group/side-left flex items-center justify-start pl-4 transition-all hover:bg-gradient-to-r hover:from-white/[0.02] hover:to-transparent`}
-                      title="Назад (Кликните по левой стороне)"
-                    />
-                    
-                    <div 
-                      onClick={(e) => { e.stopPropagation(); handleNextAction(); }}
-                      className={`absolute top-0 right-0 w-1/2 h-full cursor-e-resize z-20 group/side-right flex items-center justify-end pr-4 transition-all hover:bg-gradient-to-l hover:from-white/[0.02] hover:to-transparent`}
-                      title="Вперед (Кликните по правой стороне)"
-                    />
+                    {/* Left & Right active overlay flip zones (DISABLED FOR VIDEOS) */}
+                    {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && (
+                      <>
+                        <div 
+                          onClick={(e) => { e.stopPropagation(); handlePrevAction(); }}
+                          className={`absolute top-0 left-0 w-1/2 h-full cursor-w-resize z-20 group/side-left flex items-center justify-start pl-4 transition-all hover:bg-gradient-to-r hover:from-white/[0.02] hover:to-transparent`}
+                          title="Назад (Кликните по левой стороне)"
+                        />
+                        
+                        <div 
+                          onClick={(e) => { e.stopPropagation(); handleNextAction(); }}
+                          className={`absolute top-0 right-0 w-1/2 h-full cursor-e-resize z-20 group/side-right flex items-center justify-end pr-4 transition-all hover:bg-gradient-to-l hover:from-white/[0.02] hover:to-transparent`}
+                          title="Вперед (Кликните по правой стороне)"
+                        />
+                      </>
+                    )}
 
                     {isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) ? (
                       <video 
@@ -3215,8 +3424,11 @@ export default function App() {
                         </a>
                       </div>
                     ) : (
-                      <img 
-                        key={isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url}
+                      <motion.img 
+                        key={isPostComic(selectedPost) ? `comic-page-alt-${currentComicPage}-${selectedPost.id}` : selectedPost.id}
+                        initial={isPostComic(selectedPost) ? { x: slideDirection === 'forward' ? 100 : -100, opacity: 0 } : false}
+                        animate={{ x: 0, opacity: 1 }}
+                        transition={{ duration: 0.28, ease: 'easeOut' }}
                         src={isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url} 
                         alt={selectedPost.title} 
                         referrerPolicy="no-referrer"
