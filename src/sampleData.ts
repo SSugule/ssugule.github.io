@@ -62,67 +62,56 @@ export const INITIAL_TAGS: Tag[] = [
 export const INITIAL_POSTS: Post[] = [
   {
     id: 'p10',
-    title: 'Zenless Zone Zero Nicole Demolition Show',
     url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&q=80&w=800',
     rating: 'explicit',
     score: 412,
     elo: 1720,
     created_at: '2026-06-02T18:30:00Z',
     uploader: 'AnbyLover',
-    description: 'Beautiful looping motion sequence of Nicole Demara showing off her briefcase weapon.',
     tags: ['zenless_zone_zero', 'maplestar', 'video', '1girl', 'neon_lighting', 'highres', 'digital_art']
   },
   {
     id: 'p11',
-    title: 'Genshin Impact Ganyu Cyber Rain',
     url: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&q=80&w=800',
     rating: 'questionable',
     score: 350,
     elo: 1655,
     created_at: '2026-06-01T22:15:00Z',
     uploader: 'TeyvatSailor',
-    description: 'A detailed portrait of Ganyu styled in dynamic holographic cyber garments under rainfall.',
     tags: ['genshin_impact', 'd-art', '1girl', 'cherry_blossoms', 'rain', 'highres', 'wallpaper']
   },
   {
     id: 'p12',
-    title: 'Roblox Femboy avatar digital sketch',
     url: 'https://images.unsplash.com/photo-1541512416146-3cf58d6b27cc?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 289,
     elo: 1540,
     created_at: '2026-06-02T10:00:00Z',
     uploader: 'RobloxianCoder',
-    description: 'Charming futuristic Roblox character styled as a glowing digital helper.',
     tags: ['roblox', 'femboy', 'anna_anon', 'neon_lighting', 'retro', 'concept_art']
   },
   {
     id: 'p13',
-    title: 'Brawl Stars Neon Shelly Battle arena',
     url: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 198,
     elo: 1480,
     created_at: '2026-05-31T09:30:00Z',
     uploader: 'BrawlChampion',
-    description: 'Action-packed digital painting of Shelly in a neon-lit cyber arena.',
     tags: ['brawl_stars', 'd-art', 'video', 'cyberpunk', 'highres']
   },
   {
     id: 'p14',
-    title: 'Pokemon Cyber Pikachu synthwave core',
     url: 'https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 520,
     elo: 1810,
     created_at: '2026-06-03T02:00:00Z',
     uploader: 'PikaFanatic',
-    description: 'Retro futuristic representation of Pikachu surrounded by glowing grid lines and lightning storm effects.',
     tags: ['pokemon', 'anna_anon', 'cyberpunk', 'neon_lighting', 'scenic', 'wallpaper']
   },
   {
     id: 'p1',
-    title: 'Neon Cyberpunk Digital Stage',
     url: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 184,
@@ -130,12 +119,10 @@ export const INITIAL_POSTS: Post[] = [
     created_at: '2026-05-28T12:00:00Z',
     uploader: 'SuguleKeeper',
     source_url: 'https://unsplash.com/photos/purple-and-blue-lighted-room-stage',
-    description: 'Hatsune Miku performing on a cyberpunk digital neon stage with glowing crowd vectors.',
     tags: ['hatsune_miku', 'vocaloid', 'gemini_ai', '1girl', 'neon_lighting', 'cyberpunk', 'blue_hair', 'highres', 'digital_art']
   },
   {
     id: 'p2',
-    title: 'Cyber Samurai Guardian',
     url: 'https://images.unsplash.com/photo-1627856013091-fed6e4e30025?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 221,
@@ -143,91 +130,76 @@ export const INITIAL_POSTS: Post[] = [
     created_at: '2026-05-27T15:30:00Z',
     uploader: 'NeoCollector',
     source_url: 'https://unsplash.com/photos/female-in-futuristic-suit',
-    description: 'Futuristic female samurai with a glowing energy sword under crimson rain.',
     tags: ['samurai_cyberpunk', 'cyberpunk_2077', 'shinkai_m', '1girl', 'neon_lighting', 'cyberpunk', 'sword', 'rain', 'highres', 'concept_art']
   },
   {
     id: 'p3',
-    title: 'Warm Ghibli Coffee Shop Scenic',
     url: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 95,
     elo: 1420,
     created_at: '2026-05-29T08:15:00Z',
     uploader: 'GhibliLover',
-    description: 'Extremely cozy cafe interior with floating light specks, dynamic cloud shading, reminiscent of a nostalgic Ghibli film.',
     tags: ['original', 'ghibli_crew', 'cozy', 'scenic', 'clouds', 'retro', 'highres', 'wallpaper']
   },
   {
     id: 'p4',
-    title: 'Celestial Shrine Guardian',
     url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 147,
     elo: 1495,
     created_at: '2026-05-26T20:45:00Z',
     uploader: 'StarWatcher',
-    description: 'An elegant temple priestess at the edge of the sky, manipulating floating constellations.',
     tags: ['celestial_guardian', 'original', 'wlop', '1girl', 'scenic', 'clouds', 'glowing_eyes', 'highres', 'digital_art']
   },
   {
     id: 'p5',
-    title: 'Neo-Genesis Eva Terminal unit',
     url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 312,
     elo: 1680,
     created_at: '2026-05-25T11:20:00Z',
     uploader: 'ThirdChild',
-    description: 'Surreal vector representation of Evangelion Unit-01 colored grids and geometric halos.',
     tags: ['asuka_langley', 'neon_genesis_evangelion', 'kuvshinov_iya', 'cyberpunk', 'neon_lighting', 'digital_art', 'wallpaper']
   },
   {
     id: 'p6',
-    title: 'Pink Hair Neon Mecha Pilot',
     url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?auto=format&fit=crop&q=80&w=800',
     rating: 'questionable',
     score: 189,
     elo: 1515,
     created_at: '2026-05-24T18:00:00Z',
     uploader: 'FranxxPilot',
-    description: 'An immersive pilot cockpit shot focusing on a glowing control neural network.',
     tags: ['zero_two', 'darling_in_the_franxx', 'mihoyo_art', '1girl', 'glowing_eyes', 'neon_lighting', 'concept_art', 'highres']
   },
   {
     id: 'p7',
-    title: 'Rem - Magical Maid Night',
     url: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?auto=format&fit=crop&q=80&w=800',
     rating: 'questionable',
     score: 135,
     elo: 1470,
     created_at: '2026-05-23T09:40:00Z',
     uploader: 'SubaruKun',
-    description: 'Rem surrounded by cosmic butterflies under a glowing crescent neon moon.',
     tags: ['rem_maid', 're_zero', 'kuvshinov_iya', '1girl', 'blue_hair', 'cat_ears', 'scenic', 'digital_art']
   },
   {
     id: 'p8',
-    title: 'Cat Girl Hacker V',
     url: 'https://images.unsplash.com/photo-1563089145-599997674d42?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 104,
     elo: 1445,
     created_at: '2026-05-22T23:10:00Z',
     uploader: 'GlitchRunner',
-    description: 'Cybernetic cat girl editing grid parameters on neon floating display panes.',
     tags: ['cyber_girl_v', 'cyberpunk_2077', 'gemini_ai', '1girl', 'cat_ears', 'neon_lighting', 'cyberpunk', 'glowing_eyes', 'highres']
   },
   {
     id: 'p9',
-    title: 'Petals in Code Rain',
     url: 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?auto=format&fit=crop&q=80&w=800',
     rating: 'safe',
     score: 172,
     elo: 1520,
     created_at: '2026-05-21T14:50:00Z',
     uploader: 'MikuHype',
-    description: 'Cherry blossom petals floating through vertical cyber code matrix screens.',
     tags: ['hatsune_miku', 'vocaloid', 'wlop', 'scenic', 'cherry_blossoms', 'rain', 'wallpaper', 'concept_art']
   }
 ];

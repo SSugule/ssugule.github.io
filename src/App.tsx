@@ -446,7 +446,8 @@ export default function App() {
 
   // Helper to calculate mock views based on post properties
   const getPostViews = (post: Post) => {
-    const codeSum = post.title.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const titleText = post.title || post.id || '';
+    const codeSum = titleText.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     return (post.score * 15) + (codeSum % 900) + 120;
   };
 

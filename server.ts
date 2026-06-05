@@ -148,7 +148,7 @@ app.get('/api/posts', async (req, res) => {
         // Clean posts insert
         const postsToInsert = INITIAL_POSTS.map(p => ({
           id: p.id,
-          title: p.title,
+          title: p.title || '',
           url: p.url,
           rating: p.rating,
           score: p.score || 1,

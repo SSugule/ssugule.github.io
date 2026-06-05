@@ -5,7 +5,7 @@
 
 export interface Post {
   id: string; // uuid or string
-  title: string;
+  title?: string;
   url: string;
   rating: 'safe' | 'questionable' | 'explicit';
   score: number; // sum of upvotes/downvotes
