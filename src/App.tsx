@@ -47,10 +47,12 @@ import {
   Flame,
   ShieldCheck
 } from 'lucide-react';
-import { Post, Tag, Comment } from './types';
+import { Post, Tag, Comment, Playlist } from './types';
 import { dbManager } from './supabaseClient';
 import { INITIAL_POSTS, INITIAL_TAGS } from './sampleData';
 import { motion } from 'motion/react';
+import { UserProfile } from './components/UserProfile';
+import { GamesView } from './components/GamesView';
 
 // Helper to determine if a URL represents a video file
 const isUrlVideo = (url: string) => {
@@ -117,8 +119,15 @@ export default function App() {
   };
 
   const [favorites, setFavorites] = useState<string[]>([]);
-  const [activeTab, setActiveTab ] = useState<'gallery' | 'upload'>('gallery');
+  const [activeTab, setActiveTab ] = useState<'gallery' | 'upload' | 'profile' | 'games'>('gallery');
   const [middleFilterTab, setMiddleFilterTab] = useState<'all' | 'arts' | 'videos' | 'comics' | 'games'>('all');
+  const [userVotes, setUserVotes] = useState<Record<string, 'up' | 'down'>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('sugule_user_votes') || '{}');
+    } catch {
+      return {};
+    }
+  });
   
   // Search & Filtering
   const [selectedTags, setSelectedTagsState] = useState<string[]>([]);
@@ -192,6 +201,15 @@ export default function App() {
   const [detailTagInput, setDetailTagInput] = useState('');
   const [isEditingBulkTags, setIsEditingBulkTags] = useState(false);
   const [bulkTagInput, setBulkTagInput] = useState('');
+  const [isZoomed, setIsZoomed] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editRating, setEditRating] = useState<'safe' | 'questionable' | 'explicit'>('safe');
+  const [editUrl, setEditUrl] = useState('');
+  const [editCoverUrl, setEditCoverUrl] = useState('');
+  const [editSource, setEditSource] = useState('');
+  const [editDesc, setEditDesc] = useState('');
+  const [editTags, setEditTags] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const [recentlyViewed, setRecentlyViewed] = useState<Post[]>([]);
@@ -205,16 +223,119 @@ export default function App() {
   const [uploadSource, setUploadSource] = useState('');
   const [uploadDesc, setUploadDesc] = useState('');
   const [uploadTagsString, setUploadTagsString] = useState('');
-  const [uploadType, setUploadType] = useState<'image' | 'video' | 'gif' | 'comic' | 'audio' | 'document' | 'installer'>('image');
+  const [uploadType, setUploadType] = useState<'image' | 'video' | 'gif' | 'comic' | 'audio' | 'document' | 'installer' | 'game'>('image');
+
+  // Game upload states
+  const [gameVersion, setGameVersion] = useState('');
+  const [gameScreenshots, setGameScreenshots] = useState(''); // Comma-separated screenshots/video URLs
+  const [gameDownloadPc, setGameDownloadPc] = useState('');
+  const [gameDownloadMobile, setGameDownloadMobile] = useState('');
+  const [gameDeviceCompatibility, setGameDeviceCompatibility] = useState<'all' | 'pc' | 'mobile'>('all');
   
-  // Comic specific upload file items
-  const [comicFiles, setComicFiles] = useState<{ name: string; state: 'idle' | 'uploading' | 'success' | 'error'; url?: string; size?: string; thumbnail?: string }[]>([]);
+  // Autocomplete suggestions
+  const [mainTagSuggestions, setMainTagSuggestions] = useState<string[]>([]);
+  const [customTagSuggestions, setCustomTagSuggestions] = useState<string[]>([]);
+  const [focusedInput, setFocusedInput] = useState<'mainTags' | 'customTag' | null>(null);
+
+  // Comic cover upload states
+  const [comicCoverUrl, setComicCoverUrl] = useState('');
+  const [comicCoverFileState, setComicCoverFileState] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  const [comicCoverFileName, setComicCoverFileName] = useState('');
 
   // Page transitioning direction and tag specifying fields
   const [slideDirection, setSlideDirection] = useState<'forward' | 'backward'>('forward');
   const [newCustomTagName, setNewCustomTagName] = useState('');
   const [newCustomTagCategory, setNewCustomTagCategory] = useState<'character' | 'copyright' | 'artist' | 'general' | 'meta'>('general');
   const [tagRegSuccessMsg, setTagRegSuccessMsg] = useState('');
+
+  // Sync Custom playlists inside App state to handle quick add from Detail view
+  const [customPlaylistsState, setCustomPlaylistsState] = useState<Playlist[]>([]);
+  useEffect(() => {
+    const syncPlaylists = () => {
+      try {
+        const saved = localStorage.getItem('SUGULE_PLAYLISTS');
+        if (saved) {
+          setCustomPlaylistsState(JSON.parse(saved));
+        } else {
+          setCustomPlaylistsState([]);
+        }
+      } catch (e) {
+        setCustomPlaylistsState([]);
+      }
+    };
+    syncPlaylists();
+    
+    window.addEventListener('storage', syncPlaylists);
+    const interval = setInterval(syncPlaylists, 1500);
+    return () => {
+      window.removeEventListener('storage', syncPlaylists);
+      clearInterval(interval);
+    };
+  }, [selectedPost]);
+
+  // Autocomplete effect for mainTags in upload
+  useEffect(() => {
+    const rawParts = uploadTagsString.split(/[\s,]+/);
+    const lastWord = rawParts[rawParts.length - 1] || '';
+    const activeWordClean = lastWord.trim().toLowerCase();
+    if (activeWordClean.length >= 1) {
+      const currentTagsSelected = rawParts.slice(0, -1).map(s => s.trim().toLowerCase());
+      const matches = tags
+        .filter(t => t.name.toLowerCase().includes(activeWordClean) && !currentTagsSelected.includes(t.name.toLowerCase()))
+        .map(t => t.name);
+      setMainTagSuggestions(matches.slice(0, 10));
+    } else {
+      setMainTagSuggestions([]);
+    }
+  }, [uploadTagsString, tags]);
+
+  // Autocomplete effect for custom tag registration name
+  useEffect(() => {
+    const cleanNewTagName = newCustomTagName.trim().toLowerCase();
+    if (cleanNewTagName.length >= 1) {
+      const matches = tags
+        .filter(t => t.name.toLowerCase().includes(cleanNewTagName))
+        .map(t => t.name);
+      setCustomTagSuggestions(matches.slice(0, 10));
+    } else {
+      setCustomTagSuggestions([]);
+    }
+  }, [newCustomTagName, tags]);
+
+  const handleSelectMainTag = (suggestedTag: string) => {
+    const parts = uploadTagsString.trimEnd().split(/[\s,]+/);
+    if (parts.length > 0) {
+      parts[parts.length - 1] = suggestedTag;
+      setUploadTagsString(parts.join(' ') + ' ');
+    } else {
+      setUploadTagsString(suggestedTag + ' ');
+    }
+    setMainTagSuggestions([]);
+  };
+
+  const handleSelectCustomTag = (suggestedTag: string) => {
+    setNewCustomTagName(suggestedTag);
+    setCustomTagSuggestions([]);
+  };
+
+  const handleComicCoverInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      setComicCoverFileName(file.name);
+      setComicCoverFileState('uploading');
+      try {
+         const publicUrl = await dbManager.uploadFile(file);
+         setComicCoverUrl(publicUrl);
+         setComicCoverFileState('success');
+      } catch (err: any) {
+         setComicCoverFileState('error');
+         alert('Ошибка загрузки обложки: ' + err.message);
+      }
+    }
+  };
+
+  // Comic specific upload file items
+  const [comicFiles, setComicFiles] = useState<{ name: string; state: 'idle' | 'uploading' | 'success' | 'error'; url?: string; size?: string; thumbnail?: string }[]>([]);
 
   // File upload state for Supabase storage
   const [dragActive, setDragActive] = useState(false);
@@ -289,19 +410,31 @@ export default function App() {
       const fetchedTags = await dbManager.getTags();
       const fetchedFavs = await dbManager.getFavorites();
       
+      const sanitizePosts = (items: Post[] | null): Post[] => {
+        if (!items) return [];
+        return items.map(p => ({
+          ...p,
+          title: '',
+          description: ''
+        }));
+      };
+
       const config = dbManager.getConfiguration();
       if (config.isEnabled) {
-        setPosts(fetchedPosts || []);
+        setPosts(sanitizePosts(fetchedPosts));
         setTags(fetchedTags || []);
       } else {
-        setPosts(fetchedPosts && fetchedPosts.length > 0 ? fetchedPosts : INITIAL_POSTS);
+        setPosts(fetchedPosts && fetchedPosts.length > 0 ? sanitizePosts(fetchedPosts) : sanitizePosts(INITIAL_POSTS));
         setTags(fetchedTags && fetchedTags.length > 0 ? fetchedTags : INITIAL_TAGS);
       }
       setFavorites(fetchedFavs || []);
     } catch (e) {
       console.error('Error fetching data from Supabase:', e);
       if (!silent) {
-        setPosts(INITIAL_POSTS);
+        const sanitizePosts = (items: Post[]): Post[] => {
+          return items.map(p => ({ ...p, title: '', description: '' }));
+        };
+        setPosts(sanitizePosts(INITIAL_POSTS));
         setTags(INITIAL_TAGS);
       }
     } finally {
@@ -537,6 +670,9 @@ export default function App() {
   // Filter and sort mechanism (supports positive and exclude negative tags, blacklist, media types, AI toggles)
   const getFilteredPosts = () => {
     return posts.filter(p => {
+      // Exclude game posts from standard gallery display
+      if (p.is_game) return false;
+
       // Blacklist filter
       if (blacklist.length > 0) {
         const hasBlacklisted = p.tags.some(t => blacklist.map(b => b.toLowerCase().trim()).includes(t.toLowerCase().trim()));
@@ -698,6 +834,7 @@ export default function App() {
   const handleViewPost = async (post: Post) => {
     setSelectedPost(post);
     setCurrentComicPage(0);
+    setIsZoomed(false);
     try {
       const fetchedComments = await dbManager.getComments(post.id);
       setComments(fetchedComments);
@@ -751,6 +888,16 @@ export default function App() {
     } catch {
       return [post.url];
     }
+  };
+
+  const getPostDisplayUrl = (post: Post | null): string => {
+    if (!post) return '';
+    if (isPostComic(post)) {
+      if (post.cover_url) return post.cover_url;
+      const pages = getComicPages(post);
+      return pages[0] || '';
+    }
+    return post.url;
   };
 
   const handlePrevPost = () => {
@@ -942,15 +1089,92 @@ export default function App() {
     }
   };
 
-  // Cast upvote/downvote
+  const handleTogglePostPlaylist = (playlistId: string, postId: string) => {
+    try {
+      const saved = localStorage.getItem('SUGULE_PLAYLISTS');
+      let lists: Playlist[] = saved ? JSON.parse(saved) : [];
+      lists = lists.map(pl => {
+        if (pl.id === playlistId) {
+          const exists = pl.postIds.includes(postId);
+          if (exists) {
+            return { ...pl, postIds: pl.postIds.filter(id => id !== postId) };
+          } else {
+            return { ...pl, postIds: [...pl.postIds, postId] };
+          }
+        }
+        return pl;
+      });
+      localStorage.setItem('SUGULE_PLAYLISTS', JSON.stringify(lists));
+      setCustomPlaylistsState(lists);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Cast upvote/downvote (Exactly 1 like or dislike per person, with toggle/correction)
   const handleVotePost = async (postId: string, dir: 'up' | 'down') => {
-    const delta = dir === 'up' ? 1 : -1;
+    const currentVote = userVotes[postId];
+    let delta = 0;
+    let nextVote: 'up' | 'down' | null = null;
+
+    if (dir === 'up') {
+      if (currentVote === 'up') {
+        delta = -1;
+        nextVote = null;
+      } else if (currentVote === 'down') {
+        delta = 2; // converts a dislike to a like: -1 to +1
+        nextVote = 'up';
+      } else {
+        delta = 1;
+        nextVote = 'up';
+      }
+    } else {
+      if (currentVote === 'down') {
+        delta = 1;
+        nextVote = null;
+      } else if (currentVote === 'up') {
+        delta = -2; // converts a like to a dislike: +1 to -1
+        nextVote = 'down';
+      } else {
+        delta = -1;
+        nextVote = 'down';
+      }
+    }
+
     try {
       const newScore = await dbManager.votePost(postId, delta);
+      
+      setUserVotes(prev => {
+        const updated = { ...prev };
+        if (nextVote === null) {
+          delete updated[postId];
+        } else {
+          updated[postId] = nextVote;
+        }
+        localStorage.setItem('sugule_user_votes', JSON.stringify(updated));
+        return updated;
+      });
+
       setPosts(prev => prev.map(p => p.id === postId ? { ...p, score: newScore } : p));
       if (selectedPost && selectedPost.id === postId) {
         setSelectedPost(prev => prev ? { ...prev, score: newScore } : null);
       }
+      
+      // Sync liked posts list for profile view highlights
+      try {
+        const liked = JSON.parse(localStorage.getItem('sugule_liked') || '[]');
+        let updatedLiked = liked;
+        if (nextVote === 'up') {
+          if (!liked.includes(postId)) {
+            updatedLiked = [...liked, postId];
+          }
+        } else {
+          updatedLiked = liked.filter((id: string) => id !== postId);
+        }
+        localStorage.setItem('sugule_liked', JSON.stringify(updatedLiked));
+        window.dispatchEvent(new Event('storage'));
+      } catch (e) {}
+
     } catch (err: any) {
       alert('Ошибка при голосовании: ' + err.message);
     }
@@ -1022,16 +1246,85 @@ export default function App() {
     }
   };
 
+  const handleOpenEditPost = () => {
+    if (!selectedPost) return;
+    setEditTitle(selectedPost.title || '');
+    setEditRating(selectedPost.rating || 'safe');
+    setEditUrl(selectedPost.url || '');
+    setEditCoverUrl(selectedPost.cover_url || '');
+    setEditSource(selectedPost.source_url || '');
+    setEditDesc(selectedPost.description || '');
+    setEditTags(selectedPost.tags.join(' '));
+    setIsEditingBulkTags(true);
+  };
+
   const handleSaveBulkTags = async () => {
     if (!selectedPost) return;
-    const cleanTags = bulkTagInput
+    try {
+      const sanitized = bulkTagInput.trim().replace(/\s+/g, ' ');
+      const list = sanitized.split(' ').filter(Boolean);
+      await dbManager.updatePostTags(selectedPost.id, list);
+      const updatedPost = { ...selectedPost, tags: list };
+      setSelectedPost(updatedPost);
+      setPosts(prev => prev.map(p => p.id === selectedPost.id ? updatedPost : p));
+      setIsEditingBulkTags(false);
+      // reload tags
+      const freshTags = await dbManager.getTags();
+      setTags(freshTags);
+    } catch (err: any) {
+      alert('Ошибка при сохранении тегов: ' + err.message);
+    }
+  };
+
+  const handleUploadEditFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsSavingEdit(true);
+    try {
+      const publicUrl = await dbManager.uploadFile(file);
+      setEditUrl(publicUrl);
+    } catch (err: any) {
+      alert('Ошибка при загрузке файла: ' + err.message);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleUploadEditCoverFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsSavingEdit(true);
+    try {
+      const publicUrl = await dbManager.uploadFile(file);
+      setEditCoverUrl(publicUrl);
+    } catch (err: any) {
+      alert('Ошибка при загрузке обложки: ' + err.message);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleSavePostDetails = async () => {
+    if (!selectedPost) return;
+    setIsSavingEdit(true);
+    const cleanTags = editTags
       .split(/[\s,]+/)
       .map(t => t.trim().toLowerCase().replace(/\s+/g, '_'))
       .filter(t => t.length > 0);
 
+    const fieldsToUpdate = {
+      title: editTitle.trim() || undefined,
+      rating: editRating,
+      url: editUrl.trim() || selectedPost.url,
+      cover_url: editCoverUrl.trim() || undefined,
+      source_url: editSource.trim() || undefined,
+      description: editDesc.trim(),
+      tags: cleanTags
+    };
+
     try {
-      await dbManager.updatePostTags(selectedPost.id, cleanTags);
-      const updatedPost = { ...selectedPost, tags: cleanTags };
+      await dbManager.updatePost(selectedPost.id, fieldsToUpdate);
+      const updatedPost = { ...selectedPost, ...fieldsToUpdate };
       setSelectedPost(updatedPost);
       setPosts(prev => prev.map(p => p.id === selectedPost.id ? updatedPost : p));
       
@@ -1039,7 +1332,9 @@ export default function App() {
       setTags(freshTags);
       setIsEditingBulkTags(false);
     } catch (err: any) {
-      alert('Ошибка сохранения списка тегов: ' + err.message);
+      alert('Ошибка при сохранении изменений: ' + err.message);
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -1167,7 +1462,6 @@ export default function App() {
     setIsSavingPost(true);
     setUploadErrorMsg('');
 
-    const finalTitle = uploadTitle.trim() || 'unknown';
     const finalArtist = uploadArtist.trim() || 'anon';
     const finalTagsString = uploadTagsString.trim() || 'tagme';
 
@@ -1184,9 +1478,14 @@ export default function App() {
       }
     }
 
+    const parseScreenshots = (str: string): string[] => {
+      if (!str.trim()) return [];
+      return str.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    };
+
     const newPost: Post = {
       id: 'p_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-      title: finalTitle,
+      title: uploadTitle.trim() || undefined,
       url: uploadUrl.trim(),
       rating: uploadRating,
       score: 1,
@@ -1194,13 +1493,20 @@ export default function App() {
       created_at: new Date().toISOString(),
       uploader: 'Администратор',
       source_url: uploadSource.trim() || undefined,
-      description: uploadDesc.trim() || undefined,
-      tags: tagArray
+      description: uploadDesc.trim() || '',
+      tags: tagArray,
+      cover_url: uploadType === 'comic' ? (comicCoverUrl.trim() || undefined) : undefined,
+      is_game: uploadType === 'game',
+      version: uploadType === 'game' ? (gameVersion.trim() || 'Last') : undefined,
+      screenshots: uploadType === 'game' ? parseScreenshots(gameScreenshots) : undefined,
+      download_pc: uploadType === 'game' ? (gameDownloadPc.trim() || undefined) : undefined,
+      download_mobile: uploadType === 'game' ? (gameDownloadMobile.trim() || undefined) : undefined,
+      device_compatibility: uploadType === 'game' ? gameDeviceCompatibility : undefined
     };
 
     try {
       await dbManager.createPost(newPost);
-      setUploadSuccessMsg(`Панель подтвердила: Работа "${newPost.title}" успешно сохранена в вашей Supabase!`);
+      setUploadSuccessMsg(`Панель подтвердила: Работа успешно сохранена в вашей Supabase!`);
       
       // Cleanup inputs
       setUploadTitle('');
@@ -1211,12 +1517,20 @@ export default function App() {
       setUploadTagsString('');
       setUploadFileState('idle');
       setUploadFileName('');
+      setComicCoverUrl('');
+      setComicCoverFileState('idle');
+      setComicCoverFileName('');
+      setGameVersion('');
+      setGameScreenshots('');
+      setGameDownloadPc('');
+      setGameDownloadMobile('');
+      setGameDeviceCompatibility('all');
 
       // Reload gallery tables
       await loadDatabase();
 
       setTimeout(() => setUploadSuccessMsg(''), 5000);
-      setActiveTab('gallery');
+      setActiveTab(uploadType === 'game' ? 'games' : 'gallery');
     } catch (err: any) {
       setUploadErrorMsg(err.message || 'Ошибка сохранения поста!');
     } finally {
@@ -1365,7 +1679,7 @@ export default function App() {
           </div>
 
           {/* Middle Tabs: "Все", "Арты", "Видео", "Комиксы", "Игры" */}
-          <div className="hidden md:flex items-center bg-black/15 border border-white/10 rounded-xl p-1 shrink-0 font-sans text-xs">
+          <div className="hidden md:flex items-center bg-black/15 border border-white/10 rounded-xl p-1 shrink-0 font-sans text-xs font-mono">
             {(['all', 'arts', 'videos', 'comics', 'games'] as const).map((tab) => {
               const labels = {
                 all: 'Все',
@@ -1374,18 +1688,24 @@ export default function App() {
                 comics: 'Комиксы',
                 games: 'Игры'
               };
-              const isActive = middleFilterTab === tab;
+              const isActive = tab === 'games' 
+                ? activeTab === 'games' 
+                : (activeTab === 'gallery' && middleFilterTab === tab);
               return (
                 <button
                   key={tab}
                   onClick={() => {
-                    setMiddleFilterTab(tab);
-                    setActiveTab('gallery');
                     setSelectedPost(null);
+                    if (tab === 'games') {
+                      setActiveTab('games');
+                    } else {
+                      setMiddleFilterTab(tab);
+                      setActiveTab('gallery');
+                    }
                   }}
                   className={`px-3.5 py-1.5 rounded-lg font-bold transition select-none cursor-pointer ${
                     isActive 
-                      ? 'bg-white text-purple-900 shadow-sm' 
+                      ? 'bg-amber-400 text-black shadow-sm font-black' 
                       : 'text-purple-100 hover:text-white hover:bg-white/10'
                   }`}
                 >
@@ -1410,18 +1730,39 @@ export default function App() {
             </button>
 
             {isSignedUp ? (
-              <span className="text-xs font-mono bg-purple-900/40 text-purple-100 px-2.5 py-1.5 rounded-lg border border-purple-800 hidden sm:inline-block">
-                @{username}
-              </span>
-            ) : (
-              <button
-                onClick={() => setShowSigninDialog(true)}
-                className="px-2.5 py-1.5 text-xs text-purple-100 hover:text-white hover:bg-white/10 rounded-lg transition font-mono flex items-center gap-1"
-                title="Войти"
+              <button 
+                onClick={() => {
+                  setActiveTab('profile');
+                  setSelectedPost(null);
+                }}
+                className={`px-3 py-1.5 text-xs font-mono rounded-lg border transition cursor-pointer ${
+                  activeTab === 'profile'
+                    ? 'bg-white text-purple-900 border-white shadow-sm'
+                    : 'bg-purple-900/40 text-purple-100 border-purple-800 hover:text-white hover:bg-purple-950/60'
+                }`}
+                title="Мой профиль и списки"
               >
-                <User className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Войти</span>
+                @{username}
               </button>
+            ) : (
+              <div className="flex items-center gap-1.5 font-mono">
+                <span className="text-[10px] select-none text-zinc-400 bg-white/5 border border-white/10 px-2.5 py-1 rounded-lg">Guest (Гость)</span>
+                <button
+                  onClick={() => {
+                    setActiveTab('profile');
+                    setSelectedPost(null);
+                  }}
+                  className={`px-2.5 py-1 text-xs rounded-lg transition flex items-center gap-1 cursor-pointer font-bold ${
+                    activeTab === 'profile'
+                      ? 'bg-white text-purple-900 shadow-sm'
+                      : 'text-purple-100 hover:text-white hover:bg-white/10'
+                  }`}
+                  title="Войти / Зарегистрироваться"
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span>Войти</span>
+                </button>
+              </div>
             )}
           </div>
 
@@ -1976,9 +2317,8 @@ export default function App() {
                         key={p.id}
                         onClick={() => handleViewPost(p)}
                         className="w-12 h-12 rounded-lg overflow-hidden border border-zinc-850 hover:border-violet-500 bg-zinc-950 transition shrink-0 cursor-pointer"
-                        title={p.title}
                       >
-                        <img src={p.url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        <img src={getPostDisplayUrl(p)} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                       </button>
                     ))}
                   </div>
@@ -2161,33 +2501,137 @@ export default function App() {
                       <div className="pt-2">
                         {!isEditingBulkTags ? (
                           <button
-                            onClick={() => {
-                              setIsEditingBulkTags(true);
-                              setBulkTagInput(selectedPost.tags.join(' '));
-                            }}
-                            className="w-full text-center py-2 bg-zinc-950 border border-zinc-900 hover:bg-zinc-900 rounded-xl text-[10px] font-mono font-bold text-zinc-400 transition hover:text-white cursor-pointer"
+                            onClick={handleOpenEditPost}
+                            className="w-full text-center py-2 bg-indigo-950/40 border border-indigo-900/30 hover:bg-indigo-900/40 hover:border-indigo-700/50 rounded-xl text-[10px] font-mono font-bold text-indigo-300 transition cursor-pointer flex items-center justify-center gap-1.5"
                           >
-                            Редактировать список тегов
+                            <Settings className="w-3.5 h-3.5 text-indigo-400" />
+                            Редактировать публикацию
                           </button>
                         ) : (
-                          <div className="space-y-2 p-1 font-mono text-xs">
-                            <span className="text-[9px] uppercase font-bold text-zinc-500">Правка тегов через пробел:</span>
-                            <textarea
-                              value={bulkTagInput}
-                              onChange={(e) => setBulkTagInput(e.target.value)}
-                              rows={5}
-                              className="w-full bg-[#050608] border border-zinc-850 rounded-xl p-2 text-[10px] text-zinc-150 focus:border-violet-600 focus:outline-none placeholder-zinc-750"
-                              placeholder="miku art happy"
-                            />
-                            <div className="flex gap-1.5">
+                          <div className="space-y-3 bg-[#0a0b0e] border border-zinc-900 p-3 rounded-2xl font-sans text-xs">
+                            <h4 className="text-[10px] font-mono font-bold text-violet-400 uppercase tracking-widest border-b border-zinc-900/80 pb-1 flex items-center gap-1.5">
+                              <Edit3 className="w-3.5 h-3.5 text-violet-500" />
+                              Изменить публикацию
+                            </h4>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[9px] font-mono uppercase font-bold text-zinc-500 block">Название:</label>
+                              <input
+                                type="text"
+                                value={editTitle}
+                                onChange={(e) => setEditTitle(e.target.value)}
+                                className="w-full bg-[#050608] border border-zinc-850 rounded-xl px-2.5 py-1.5 text-[10.5px] text-zinc-150 focus:border-violet-600 focus:outline-none"
+                                placeholder="Название..."
+                              />
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[9px] font-mono uppercase font-bold text-zinc-500 block">Категория рейтинга:</label>
+                              <select
+                                value={editRating}
+                                onChange={(e) => setEditRating(e.target.value as any)}
+                                className="w-full bg-[#050608] border border-zinc-850 rounded-xl px-2.5 py-1.5 text-[10.5px] text-zinc-155 focus:border-violet-600 focus:outline-none"
+                              >
+                                <option value="safe">Safe (Безопасно)</option>
+                                <option value="questionable">Questionable (Сомнительно)</option>
+                                <option value="explicit">Explicit (18+)</option>
+                              </select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[9px] font-mono uppercase font-bold text-zinc-500 block">Источник (Source URL):</label>
+                              <input
+                                type="text"
+                                value={editSource}
+                                onChange={(e) => setEditSource(e.target.value)}
+                                className="w-full bg-[#050608] border border-zinc-850 rounded-xl px-2.5 py-1.5 text-[10.5px] text-zinc-150 focus:border-violet-600 focus:outline-none"
+                                placeholder="http://..."
+                              />
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[9px] font-mono uppercase font-bold text-zinc-500 block">Описание работы:</label>
+                              <textarea
+                                value={editDesc}
+                                onChange={(e) => setEditDesc(e.target.value)}
+                                rows={2}
+                                className="w-full bg-[#050608] border border-zinc-850 rounded-xl p-2.5 text-[10.5px] text-zinc-150 focus:border-violet-600 focus:outline-none"
+                                placeholder="Добавьте описание..."
+                              />
+                            </div>
+
+                            <div className="space-y-2 border-t border-zinc-900/80 pt-2">
+                              <label className="text-[9px] font-mono uppercase font-bold text-zinc-500 block">Файл Медиа:</label>
+                              <input
+                                type="text"
+                                value={editUrl}
+                                onChange={(e) => setEditUrl(e.target.value)}
+                                className="w-full bg-[#050608] border border-zinc-850 rounded-xl px-2.5 py-1.5 text-[10.5px] text-zinc-150 focus:border-violet-600 focus:outline-none font-mono text-[9px]"
+                                placeholder="Ссылка на файл..."
+                              />
+                              <div className="relative">
+                                <input
+                                  type="file"
+                                  id="edit-file-uploader"
+                                  onChange={handleUploadEditFile}
+                                  className="hidden"
+                                />
+                                <label
+                                  htmlFor="edit-file-uploader"
+                                  className="w-full py-1.5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-850 text-zinc-350 hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase transition block text-center cursor-pointer"
+                                >
+                                  {isSavingEdit ? 'Загрузка файла...' : '📁 Загрузить новый файл'}
+                                </label>
+                              </div>
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-[9px] font-mono uppercase font-bold text-zinc-500 block">Обложка (Cover URL):</label>
+                              <input
+                                type="text"
+                                value={editCoverUrl}
+                                onChange={(e) => setEditCoverUrl(e.target.value)}
+                                className="w-full bg-[#050608] border border-zinc-850 rounded-xl px-2.5 py-1.5 text-[10.5px] text-zinc-150 focus:border-violet-600 focus:outline-none font-mono text-[9px]"
+                                placeholder="Ссылка на обложку..."
+                              />
+                              <div className="relative">
+                                <input
+                                  type="file"
+                                  id="edit-cover-uploader"
+                                  onChange={handleUploadEditCoverFile}
+                                  className="hidden"
+                                />
+                                <label
+                                  htmlFor="edit-cover-uploader"
+                                  className="w-full py-1.5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-850 text-zinc-350 hover:text-white rounded-lg text-[9px] font-mono font-bold uppercase transition block text-center cursor-pointer"
+                                >
+                                  {isSavingEdit ? 'Загрузка...' : '🖼️ Загрузить новую обложку'}
+                                </label>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1.5 border-t border-zinc-900/80 pt-2 font-mono">
+                              <label className="text-[9px] uppercase font-bold text-zinc-500 block">Список тегов (через пробел):</label>
+                              <textarea
+                                value={editTags}
+                                onChange={(e) => setEditTags(e.target.value)}
+                                rows={4}
+                                className="w-full bg-[#050608] border border-zinc-850 rounded-xl p-2 text-[10px] text-zinc-150 focus:border-violet-600 focus:outline-[#343b4e] focus:outline-none placeholder-zinc-750"
+                                placeholder="miku_art vocaloid green_hair"
+                              />
+                            </div>
+
+                            <div className="flex gap-1.5 border-t border-zinc-900/85 pt-2 font-mono">
                               <button
-                                onClick={handleSaveBulkTags}
-                                className="flex-grow py-1.5 bg-violet-600 hover:bg-[#1b251c] hover:text-[#abffb3] text-white rounded-lg text-[10px] font-bold uppercase cursor-pointer"
+                                onClick={handleSavePostDetails}
+                                disabled={isSavingEdit}
+                                className="flex-grow py-1.5 bg-violet-600 hover:bg-violet-500 border border-violet-500/20 text-white rounded-lg text-[10px] font-bold uppercase cursor-pointer"
                               >
                                 Сохранить
                               </button>
                               <button
                                 onClick={() => setIsEditingBulkTags(false)}
+                                disabled={isSavingEdit}
                                 className="flex-grow py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-lg text-[10px] font-bold uppercase cursor-pointer"
                               >
                                 Отмена
@@ -2238,7 +2682,11 @@ export default function App() {
                     <div 
                       onTouchStart={handleTouchStart}
                       onTouchEnd={handleTouchEnd}
-                      className="bg-black/90 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[300px] sm:min-h-[420px] max-h-[720px] overflow-hidden group select-none shadow-2xl shadow-black/80 max-w-4xl w-full"
+                      className={`bg-black/95 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[300px] sm:min-h-[420px] transition-all duration-300 select-none shadow-2xl shadow-black/80 w-full ${
+                        isZoomed 
+                          ? 'max-h-none overflow-y-auto max-w-5xl' 
+                          : 'max-h-[85vh] overflow-hidden max-w-4xl'
+                      }`}
                     >
                         {/* Interactive nav chevrons on sides */}
                         <button 
@@ -2249,8 +2697,8 @@ export default function App() {
                         </button>
 
                         <div className="w-full flex-grow flex items-center justify-center relative min-h-[260px] sm:min-h-[360px]">
-                          {/* Left / Right active overlay flip zones (DISABLED FOR VIDEOS) */}
-                          {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && (
+                          {/* Left / Right active overlay flip zones (DISABLED FOR VIDEOS OR WHEN ZOOMED) */}
+                          {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && !isZoomed && (
                             <>
                               <div 
                                 onClick={(e) => { e.stopPropagation(); handlePrevAction(); }}
@@ -2273,7 +2721,7 @@ export default function App() {
                               autoPlay 
                               loop 
                               playsInline 
-                              className="max-h-[660px] w-auto max-w-full rounded-xl object-contain relative z-10 shadow-lg"
+                              className="max-h-[75vh] md:max-h-[80vh] w-auto max-w-full rounded-xl object-contain relative z-10 shadow-lg"
                             />
                           ) : isUrlDownloadable(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) ? (
                             <div className="flex flex-col items-center justify-center p-6 bg-[#0b0f19] border border-zinc-800 rounded-2xl space-y-4 max-w-md w-full relative z-30 text-center select-text shadow-xl">
@@ -2304,12 +2752,29 @@ export default function App() {
                               animate={{ x: 0, opacity: 1 }}
                               transition={{ duration: 0.28, ease: 'easeOut' }}
                               src={isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url} 
-                              alt={selectedPost.title} 
+                              alt="Медиа"
                               referrerPolicy="no-referrer"
-                              className="max-h-[660px] w-auto max-w-full rounded-xl object-contain relative z-10 shadow-lg"
+                              onClick={() => setIsZoomed(!isZoomed)}
+                              className={`${
+                                isZoomed 
+                                  ? 'w-full h-auto max-w-none max-h-none cursor-zoom-out' 
+                                  : 'max-h-[75vh] md:max-h-[80vh] w-auto max-w-full cursor-zoom-in'
+                              } rounded-xl object-contain relative z-10 shadow-lg h-auto transition-all duration-300`}
                             />
                           )}
                         </div>
+
+                        {/* Expandable scale zoom action overlay indicator */}
+                        {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && !isUrlDownloadable(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && (
+                          <button
+                            onClick={() => setIsZoomed(!isZoomed)}
+                            className="absolute bottom-4 right-4 z-30 px-2.5 py-1.5 rounded-lg bg-black/90 backdrop-blur-sm border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white transition text-[9px] uppercase tracking-wider font-mono font-bold flex items-center gap-1.5 cursor-pointer shadow-md"
+                            title={isZoomed ? "Вписать в экран" : "Реальный размер"}
+                          >
+                            <Maximize2 className="w-3 h-3 text-violet-400" />
+                            <span>{isZoomed ? "Вписать" : "100% размер"}</span>
+                          </button>
+                        )}
 
                         <button 
                           onClick={handleNextAction}
@@ -2330,7 +2795,6 @@ export default function App() {
 
                       {/* Title block with color-coded tags shown at the bottom of media */}
                       <div className="w-full mt-4 bg-[#0a0c10] border border-zinc-900/60 p-4 rounded-xl space-y-3 select-none">
-                        <h4 className="text-sm font-bold text-zinc-100 tracking-wide select-text">{selectedPost.title}</h4>
                         
                         <div className="flex flex-wrap gap-1.5 font-mono select-none">
                           {(Array.from(new Set(selectedPost.tags)) as string[]).map(t => {
@@ -2412,6 +2876,35 @@ export default function App() {
                           </a>
                         )}
                       </div>
+
+                      {/* PLAYLIST ATTACHMENT WIDGET */}
+                      {isSignedUp && customPlaylistsState.length > 0 && (
+                        <div className="mt-4.5 w-full bg-[#08090d] border border-zinc-900/80 p-3 rounded-xl select-none text-left">
+                          <span className="text-[9.5px] font-mono uppercase tracking-wider text-zinc-550 font-bold block mb-2">
+                            Добавить в списки (Playlists)
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {customPlaylistsState.map(pl => {
+                              const inPlaylist = pl.postIds.includes(selectedPost.id);
+                              return (
+                                <button
+                                  key={pl.id}
+                                  onClick={() => handleTogglePostPlaylist(pl.id, selectedPost.id)}
+                                  className={`px-2.5 py-1.5 rounded-lg text-[10px] font-mono tracking-wide font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                                    inPlaylist
+                                      ? 'bg-indigo-950/40 border border-indigo-500 text-indigo-300'
+                                      : 'bg-zinc-950 border border-zinc-850 text-zinc-400 hover:text-white hover:border-zinc-700'
+                                  }`}
+                                  title={inPlaylist ? 'Удалить из плейлиста' : 'Добавить в плейлист'}
+                                >
+                                  {inPlaylist ? <Check className="w-3 h-3 text-indigo-400 font-extrabold" /> : <Plus className="w-3 h-3 text-zinc-650" />}
+                                  <span>{pl.name}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
 
                       {/* PRIMARY NAVIGATION BUTTONS row centered */}
                       <div className="flex justify-center gap-3 mt-4 w-full max-w-xl select-none">
@@ -2588,6 +3081,17 @@ export default function App() {
                         key={post.id}
                         id={`post-${post.id}`}
                         onClick={() => handleViewPost(post)}
+                        onMouseEnter={(e) => {
+                          const v = e.currentTarget.querySelector('video');
+                          if (v) v.play().catch(() => {});
+                        }}
+                        onMouseLeave={(e) => {
+                          const v = e.currentTarget.querySelector('video');
+                          if (v) {
+                            v.pause();
+                            v.currentTime = 0;
+                          }
+                        }}
                         className="group bg-[#131418] border border-zinc-800/80 rounded-xl overflow-hidden hover:border-emerald-500/50 shadow-md transition-all duration-300 hover:shadow-emerald-950/10 hover:shadow-lg cursor-pointer flex flex-col relative"
                       >
                         
@@ -2602,13 +3106,14 @@ export default function App() {
                                 loop 
                                 muted 
                                 playsInline 
-                                className="w-full h-full object-cover"
+                                preload="metadata"
+                                className="w-full h-full object-cover animate-fadeIn"
                               />
                             </div>
                           ) : (
                             <img 
-                              src={post.url} 
-                              alt={post.title}
+                              src={getPostDisplayUrl(post)} 
+                              alt="Медиа"
                               referrerPolicy="no-referrer"
                               className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 group-hover:brightness-[1.05]"
                             />
@@ -2722,7 +3227,7 @@ export default function App() {
                 </div>
 
                 {/* Grid for Media Type Selection (3 columns, 2/3 rows) */}
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 gap-2">
                   {[
                     { id: 'image', label: 'IMAGE', icon: FileImage },
                     { id: 'video', label: 'VIDEO', icon: Video },
@@ -2731,6 +3236,7 @@ export default function App() {
                     { id: 'audio', label: 'AUDIO', icon: Music },
                     { id: 'document', label: 'DOCUMENT', icon: FileText },
                     { id: 'installer', label: 'INSTALLER', icon: FolderDown },
+                    { id: 'game', label: 'GAME / ИГРА', icon: Flame },
                   ].map(t => {
                     const IconComponent = t.icon;
                     const isActive = uploadType === t.id;
@@ -2760,29 +3266,172 @@ export default function App() {
 
                 {/* Form Field Inputs */}
                 <div className="space-y-4">
-                  {/* Title */}
-                  <div className="space-y-1">
-                    <input 
-                      type="text"
-                      value={uploadTitle}
-                      onChange={(e) => setUploadTitle(e.target.value)}
-                      placeholder="Title (fallback: unknown)"
-                      className="w-full bg-[#0a0b12] border border-zinc-850 focus:border-purple-500 rounded-xl px-4 py-3 text-white focus:outline-none placeholder-zinc-500 font-sans text-sm"
-                    />
-                  </div>
-
-                  {/* Description (Textarea) */}
-                  <div className="space-y-1">
-                    <textarea 
-                      value={uploadDesc}
-                      onChange={(e) => setUploadDesc(e.target.value)}
-                      placeholder="Description"
-                      rows={4}
-                      className="w-full bg-[#0a0b12] border border-[#292a30] focus:border-purple-500 rounded-xl px-4 py-3 text-white focus:outline-none placeholder-zinc-500 font-sans text-sm"
-                    />
-                  </div>
+                  {/* Comic cover visual picker */}
+                  {uploadType === 'comic' && (
+                    <div className="bg-[#0b0f19] border border-zinc-850 rounded-2xl p-4 space-y-3">
+                      <span className="text-[10px] font-mono tracking-wider uppercase font-bold text-zinc-400 block">
+                        Обложка комикса (Опционально)
+                      </span>
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                        <input 
+                          type="file" 
+                          id="comic-cover-upload" 
+                          onChange={handleComicCoverInput}
+                          accept="image/*"
+                          className="hidden" 
+                        />
+                        <label 
+                          htmlFor="comic-cover-upload" 
+                          className="px-4 py-2 bg-zinc-900 border border-zinc-850 hover:border-violet-500 hover:text-white rounded-xl text-xs font-mono font-bold cursor-pointer transition flex items-center gap-2 shrink-0 self-start"
+                        >
+                          <FileImage className="w-4 h-4 text-violet-400" />
+                          <span>Выбрать файл обложки</span>
+                        </label>
+                        <div className="overflow-hidden">
+                          {comicCoverFileState === 'uploading' && (
+                            <span className="text-[10px] text-amber-500 font-mono animate-pulse">Загрузка...</span>
+                          )}
+                          {comicCoverFileState === 'success' && (
+                            <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                              ✓ Готово: <span className="text-zinc-400 truncate max-w-[150px]">{comicCoverFileName}</span>
+                            </span>
+                          )}
+                          {comicCoverFileState === 'error' && (
+                            <span className="text-[10px] text-rose-500 font-mono">Ошибка загрузки</span>
+                          )}
+                          {comicCoverFileState === 'idle' && (
+                            <span className="text-[10px] text-zinc-500 font-mono">Если не добавлена, обложкой станет 1-я страница</span>
+                          )}
+                        </div>
+                      </div>
+                      {comicCoverUrl && (
+                        <div className="relative w-20 h-28 border border-zinc-800 rounded-lg overflow-hidden bg-black/40 shadow">
+                          <img src={comicCoverUrl} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setComicCoverUrl('');
+                              setComicCoverFileState('idle');
+                              setComicCoverFileName('');
+                            }}
+                            className="absolute top-1 right-1 p-1 bg-black/80 hover:bg-rose-600 hover:text-white rounded-full text-[9px] font-bold leading-none cursor-pointer flex items-center justify-center w-4 h-4 transition"
+                            title="Удалить обложку"
+                          >
+                            ✖
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Creator Name (Artist) */}
+                  {uploadType === 'game' && (
+                    <div className="bg-[#0b0f19] border border-zinc-850 rounded-2xl p-4.5 space-y-4 text-left">
+                      <span className="text-[10px] font-mono tracking-wider uppercase font-bold text-violet-400 block border-b border-zinc-900 pb-2">
+                        🎮 Параметры Игры / Game Details
+                      </span>
+
+                      {/* Game Title */}
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-mono text-zinc-400 block">Название игры *</span>
+                        <input 
+                          type="text"
+                          required={uploadType === 'game'}
+                          value={uploadTitle}
+                          onChange={(e) => setUploadTitle(e.target.value)}
+                          placeholder="Например: Cyberpunk RPG 2D"
+                          className="w-full bg-[#0a0b12] border border-zinc-850 focus:border-purple-500 rounded-xl px-4 py-2.5 text-white focus:outline-none placeholder-zinc-650 text-sm"
+                        />
+                      </div>
+
+                      {/* Game Version */}
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-mono text-zinc-400 block">Версия игр (оставьте пустым для "Last")</span>
+                        <input 
+                          type="text"
+                          value={gameVersion}
+                          onChange={(e) => setGameVersion(e.target.value)}
+                          placeholder="v1.0, beta 5.3..."
+                          className="w-full bg-[#0a0b12] border border-zinc-850 focus:border-purple-500 rounded-xl px-4 py-2.5 text-white focus:outline-none placeholder-zinc-650 text-sm"
+                        />
+                      </div>
+
+                      {/* Cover URL Info */}
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-mono text-zinc-400 block">Ссылка на обложку (или загрузите файл сверху) *</span>
+                        <input 
+                          type="url"
+                          required={uploadType === 'game'}
+                          value={uploadUrl}
+                          onChange={(e) => setUploadUrl(e.target.value)}
+                          placeholder="https://images.unsplash.com/... (URL обложки)"
+                          className="w-full bg-[#0a0b12] border border-zinc-850 focus:border-purple-500 rounded-xl px-4 py-2.5 text-white focus:outline-none placeholder-zinc-650 text-sm font-mono"
+                        />
+                      </div>
+
+                      {/* Gameplay Screens and Videos */}
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-mono text-zinc-400 block">Скриншоты и видео геймплея (через запятую)</span>
+                        <textarea
+                          value={gameScreenshots}
+                          onChange={(e) => setGameScreenshots(e.target.value)}
+                          placeholder="https://images.unsplash.com/photo-1542751371-adc38448a05e, https://images.unsplash.com/photo-1511512578047-dfb367046420"
+                          rows={2}
+                          className="w-full bg-[#0a0b12] border border-zinc-850 focus:border-purple-500 rounded-xl px-4 py-2.5 text-white focus:outline-none placeholder-zinc-650 text-sm font-mono leading-normal"
+                        />
+                      </div>
+
+                      {/* Compatibility check */}
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-mono text-zinc-400 block">Платформы устройства</span>
+                        <div className="grid grid-cols-3 gap-2">
+                          {[
+                            { id: 'all', label: 'Все устройства' },
+                            { id: 'pc', label: 'Только ПК' },
+                            { id: 'mobile', label: 'Только Телефон' },
+                          ].map(opt => (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => setGameDeviceCompatibility(opt.id as any)}
+                              className={`py-2 text-[10px] rounded-lg border font-mono tracking-wide font-bold transition cursor-pointer ${
+                                gameDeviceCompatibility === opt.id
+                                  ? 'bg-purple-600 border-purple-500 text-white shadow-md'
+                                  : 'bg-zinc-950 border-zinc-850 text-zinc-400 hover:text-white'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Download Links */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1.5">
+                          <span className="text-xs font-mono text-zinc-400 block">Файл для ПК (.exe/.zip/.rar)</span>
+                          <input 
+                            type="text"
+                            value={gameDownloadPc}
+                            onChange={(e) => setGameDownloadPc(e.target.value)}
+                            placeholder="https://domain.com/game_pc.zip"
+                            className="w-full bg-[#0a0b12] border border-zinc-850 focus:border-purple-500 rounded-xl px-4 py-2.5 text-white focus:outline-none placeholder-zinc-650 text-xs font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <span className="text-xs font-mono text-zinc-400 block">Файл для телефона (.apk)</span>
+                          <input 
+                            type="text"
+                            value={gameDownloadMobile}
+                            onChange={(e) => setGameDownloadMobile(e.target.value)}
+                            placeholder="https://domain.com/game_mobile.apk"
+                            className="w-full bg-[#0a0b12] border border-zinc-850 focus:border-purple-500 rounded-xl px-4 py-2.5 text-white focus:outline-none placeholder-zinc-650 text-xs font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="space-y-1">
                     <input 
                       type="text"
@@ -2794,33 +3443,89 @@ export default function App() {
                   </div>
 
                   {/* Tags */}
-                  <div className="space-y-1">
+                  <div className="space-y-1 relative">
                     <input 
                       type="text"
                       value={uploadTagsString}
                       onChange={(e) => setUploadTagsString(e.target.value)}
+                      onFocus={() => setFocusedInput('mainTags')}
+                      onBlur={() => setTimeout(() => setFocusedInput(null), 250)}
                       placeholder="Tags (fallback: tagme)"
                       className="w-full bg-[#0a0b12] border border-zinc-850 focus:border-purple-500 rounded-xl px-4 py-3 text-white focus:outline-none placeholder-zinc-500 font-sans text-sm"
                     />
+
+                    {mainTagSuggestions.length > 0 && focusedInput === 'mainTags' && (
+                      <div className="absolute z-50 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl p-1.5 divide-y divide-zinc-900 scrollbar-thin">
+                        {mainTagSuggestions.map((tag) => {
+                          const catInfo = tags.find(t => t.name === tag);
+                          const cat = catInfo ? catInfo.category : 'general';
+                          const catColor = getCategoryColor(cat);
+                          return (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => {
+                                handleSelectMainTag(tag);
+                              }}
+                              className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:text-white hover:bg-zinc-900 duration-150 rounded-lg flex items-center justify-between cursor-pointer"
+                            >
+                              <span>{tag}</span>
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded border uppercase font-mono tracking-wider ${catColor.badge}`}>
+                                {cat}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Custom tag registration utility */}
                   <div className="bg-[#050608] border border-zinc-900 rounded-xl p-3.5 space-y-2 mt-4 select-none">
                     <span className="text-[10px] font-mono tracking-wider uppercase font-bold text-zinc-400 block pb-0.5">Создать тег с категорией</span>
                     
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <input 
-                        type="text"
-                        value={newCustomTagName}
-                        onChange={(e) => setNewCustomTagName(e.target.value)}
-                        placeholder="Название (например: miku)"
-                        className="bg-black/40 border border-zinc-850 hover:border-zinc-800 focus:border-purple-500 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none"
-                      />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 relative">
+                      <div className="relative">
+                        <input 
+                          type="text"
+                          value={newCustomTagName}
+                          onChange={(e) => setNewCustomTagName(e.target.value)}
+                          onFocus={() => setFocusedInput('customTag')}
+                          onBlur={() => setTimeout(() => setFocusedInput(null), 250)}
+                          placeholder="Название (например: miku)"
+                          className="w-full bg-[#111218] border border-zinc-850 hover:border-zinc-800 focus:border-purple-500 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-650 focus:outline-none"
+                        />
+
+                        {customTagSuggestions.length > 0 && focusedInput === 'customTag' && (
+                          <div className="absolute z-50 left-0 right-0 mt-1 max-h-40 overflow-y-auto bg-zinc-950 border border-zinc-800 rounded-lg shadow-xl p-1 divide-y divide-zinc-900 scrollbar-thin">
+                            {customTagSuggestions.map((tag) => {
+                              const catInfo = tags.find(t => t.name === tag);
+                              const cat = catInfo ? catInfo.category : 'general';
+                              const catColor = getCategoryColor(cat);
+                              return (
+                                <button
+                                  key={tag}
+                                  type="button"
+                                  onClick={() => {
+                                    handleSelectCustomTag(tag);
+                                  }}
+                                  className="w-full text-left px-2 py-1.5 text-[11px] text-zinc-400 hover:text-white hover:bg-zinc-900 duration-150 rounded flex items-center justify-between cursor-pointer"
+                                >
+                                  <span>{tag}</span>
+                                  <span className={`text-[8px] px-1 rounded uppercase font-mono tracking-wider ${catColor.badge}`}>
+                                    {cat}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                       
                       <select
                         value={newCustomTagCategory}
                         onChange={(e) => setNewCustomTagCategory(e.target.value as any)}
-                        className="bg-black/40 border border-zinc-850 focus:border-purple-500 rounded-lg px-2 py-1.5 text-xs text-zinc-300 outline-none cursor-pointer"
+                        className="bg-black/40 border border-zinc-850 focus:border-purple-500 rounded-lg px-2 py-1.5 text-xs text-zinc-300 outline-none cursor-pointer h-full"
                       >
                         <option value="general" className="bg-[#121316]">general (обычный)</option>
                         <option value="character" className="bg-[#121316]">character (персонаж)</option>
@@ -2962,6 +3667,46 @@ export default function App() {
 
             </form>
           </div>
+        )}
+
+        {/* --- TAB 2.5: GAMES HUB PLATFORM VIEW --- */}
+        {activeTab === 'games' && (
+          <GamesView 
+            posts={posts}
+            favorites={favorites}
+            onToggleFavorite={handleToggleFavorite}
+            onVotePost={handleVotePost}
+          />
+        )}
+
+        {/* --- TAB 3: USER PROFILE AND REGISTRATION VIEW --- */}
+        {activeTab === 'profile' && (
+          <UserProfile 
+            posts={posts}
+            favorites={favorites}
+            onViewPost={handleViewPost}
+            currentUsername={username}
+            isSignedUp={isSignedUp}
+            followedTags={followedTags}
+            onToggleFollowTag={handleToggleFollowTag}
+            onSearchTag={(tag) => {
+              setSelectedTags([tag]);
+              setSidebarTagQuery('');
+              setActiveTab('gallery');
+            }}
+            onLoginSuccess={(newUsername) => {
+              setIsSignedUp(true);
+              setUsername(newUsername);
+              localStorage.setItem('sugule_username', newUsername);
+              window.dispatchEvent(new Event('storage'));
+            }}
+            onLogout={() => {
+              setIsSignedUp(false);
+              setUsername('');
+              localStorage.removeItem('sugule_username');
+              window.dispatchEvent(new Event('storage'));
+            }}
+          />
         )}
       </main>
 
@@ -3290,12 +4035,12 @@ export default function App() {
                                         <div className="flex items-center gap-1">
                                           <button 
                                             onClick={() => { handleQueryAddTag(tag); setSelectedPost(null); }}
-                                            className="px-1 text-[9px] font-sans font-bold text-emerald-400 hover:bg-emerald-950/40 border border-emerald-900/30 rounded cursor-pointer transition select-none"
+                                            className="px-1 text-[9px] font-sans font-bold text-emerald-400 hover:bg-emerald-950/40 border border-emerald-950/30 rounded cursor-pointer transition select-none"
                                             title="Добавить"
                                           >+</button>
                                           <button 
                                             onClick={() => { handleQueryExcludeTag(tag); setSelectedPost(null); }}
-                                            className="px-1 text-[9px] font-sans font-bold text-rose-400 hover:bg-red-950/40 border border-red-900/30 rounded cursor-pointer transition select-none"
+                                            className="px-1 text-[9px] font-sans font-bold text-rose-400 hover:bg-red-950/40 border border-red-950/30 rounded cursor-pointer transition select-none"
                                             title="Исключить"
                                           >-</button>
                                           <button onClick={() => handleRemoveTagFromPost(tag)} className="text-zinc-500 hover:text-rose-500 p-0.5" title="Удалить из поста"><X className="w-2.5 h-2.5" /></button>
@@ -3338,7 +4083,6 @@ export default function App() {
                 {/* 1. TOP TITLE & ACTION LINKS BAR */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-900 pb-3">
                   <div>
-                    <h2 className="font-bold text-white text-lg tracking-wide leading-snug">{selectedPost.title}</h2>
                     <p className="text-[10px] font-mono text-zinc-500 mt-1">
                       Загружено от: <strong className="text-zinc-450">{selectedPost.uploader}</strong> | Общая оценка: <strong className="text-emerald-400">+{selectedPost.score || 0}</strong>
                     </p>
@@ -3374,19 +4118,27 @@ export default function App() {
                     <ChevronLeft className="w-5 h-5" />
                   </button>
 
+                  <button 
+                    onClick={handleNextAction}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/80 border border-zinc-900 hover:border-emerald-500 hover:text-emerald-400 text-zinc-450 transition opacity-0 group-hover:opacity-100 focus:opacity-100 z-30 hidden sm:flex cursor-pointer"
+                    title="Вперед (Стрелка вправо)"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+
                   <div className="w-full flex-grow flex items-center justify-center relative min-h-[300px]">
                     {/* Left & Right active overlay flip zones (DISABLED FOR VIDEOS) */}
                     {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && (
                       <>
                         <div 
                           onClick={(e) => { e.stopPropagation(); handlePrevAction(); }}
-                          className={`absolute top-0 left-0 w-1/2 h-full cursor-w-resize z-20 group/side-left flex items-center justify-start pl-4 transition-all hover:bg-gradient-to-r hover:from-white/[0.02] hover:to-transparent`}
+                          className="absolute top-0 left-0 w-1/2 h-full cursor-w-resize z-20 group/side-left flex items-center justify-start pl-4 transition-all hover:bg-gradient-to-r hover:from-white/[0.02] hover:to-transparent"
                           title="Назад (Кликните по левой стороне)"
                         />
                         
                         <div 
                           onClick={(e) => { e.stopPropagation(); handleNextAction(); }}
-                          className={`absolute top-0 right-0 w-1/2 h-full cursor-e-resize z-20 group/side-right flex items-center justify-end pr-4 transition-all hover:bg-gradient-to-l hover:from-white/[0.02] hover:to-transparent`}
+                          className="absolute top-0 right-0 w-1/2 h-full cursor-e-resize z-20 group/side-right flex items-center justify-end pr-4 transition-all hover:bg-gradient-to-l hover:from-white/[0.02] hover:to-transparent"
                           title="Вперед (Кликните по правой стороне)"
                         />
                       </>
@@ -3411,14 +4163,14 @@ export default function App() {
                           <p className="text-sm font-bold text-zinc-100 font-mono tracking-tight break-all px-2">
                             {(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url).split('/').pop()}
                           </p>
-                          <p className="text-xs text-zinc-500 uppercase font-mono tracking-wider font-bold">Исполняемый файл / Установщик игры / Архив</p>
+                          <p className="text-xs text-zinc-500 uppercase font-mono tracking-wider font-bold">Исполняемый файл / Установщик / Архив</p>
                         </div>
                         <a 
                           href={isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url}
                           download
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="px-6 py-3 bg-violet-600 hover:bg-violet-500 active:bg-violet-700 text-white rounded-xl font-bold font-mono text-xs shadow-lg shadow-violet-950/40 border border-violet-500/25 transition flex items-center gap-2 cursor-pointer"
+                          className="px-6 py-3 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 rounded-xl text-xs font-mono font-bold tracking-wider text-white shadow-lg shadow-violet-900/30 hover:shadow-violet-950/50 transition duration-300 w-full hover:-translate-y-0.5 flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <Download className="w-4 h-4" />
                           <span>СКАЧАТЬ ФАЙЛ</span>
@@ -3426,115 +4178,92 @@ export default function App() {
                       </div>
                     ) : (
                       <motion.img 
-                        key={isPostComic(selectedPost) ? `comic-page-alt-${currentComicPage}-${selectedPost.id}` : selectedPost.id}
+                        key={isPostComic(selectedPost) ? `comic-page-${currentComicPage}-${selectedPost.id}` : selectedPost.id}
                         initial={isPostComic(selectedPost) ? { x: slideDirection === 'forward' ? 100 : -100, opacity: 0 } : false}
                         animate={{ x: 0, opacity: 1 }}
                         transition={{ duration: 0.28, ease: 'easeOut' }}
                         src={isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url} 
-                        alt={selectedPost.title} 
+                        alt="Медиа"
                         referrerPolicy="no-referrer"
-                        className="max-h-[580px] w-auto max-w-full rounded object-contain relative z-10 select-text cursor-default"
+                        className="max-h-[580px] w-auto max-w-full rounded object-contain relative z-10"
                       />
                     )}
                   </div>
-
-                  <button 
-                    onClick={handleNextAction}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/80 border border-zinc-900 hover:border-emerald-500 hover:text-emerald-400 text-zinc-450 transition opacity-0 group-hover:opacity-100 focus:opacity-100 z-30 hidden sm:flex cursor-pointer"
-                    title="Вперед (Стрелка вправо)"
-                  >
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
-
-                  {/* Floating Page slider & hotkeys footer */}
-                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-black/85 border border-zinc-900/80 px-4 py-1.5 rounded-full text-[10px] font-mono text-zinc-300 flex items-center gap-2 shadow-2xl z-30 select-none whitespace-nowrap">
-                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-                    {isPostComic(selectedPost) ? (
-                      <span>Страница <strong>{currentComicPage + 1}</strong> из <strong>{getComicPages(selectedPost).length}</strong></span>
-                    ) : (
-                      <span>Карточка <strong>{posts.findIndex(p => p.id === selectedPost.id) + 1}</strong> из <strong>{posts.length}</strong></span>
-                    )}
-                    <span className="text-zinc-650 ml-1 border-l border-zinc-850 pl-2 text-[9px] text-zinc-500 hidden md:inline">Сделайте клик по краям картинки или стрелки на клавиатуре</span>
-                  </div>
                 </div>
 
-                {/* Lore / Description panel if existing */}
-                {selectedPost.description && (
-                  <div className="border border-zinc-900 bg-[#0d0e12]/60 p-3.5 rounded">
-                    <div className="flex items-center gap-2 mb-1.5 text-zinc-500 text-[10px] uppercase font-mono tracking-widest font-bold">
-                      <CornerDownRight className="w-3.5 h-3.5 text-indigo-400 font-bold" />
-                      <span>Примечания автора</span>
+                {/* 3. DYNAMIC COMMENTS LIST IN BOORU FORMAT */}
+                {selectedPost?.is_game ? (
+                  <div className="space-y-4 pt-2 border-t border-zinc-900">
+                    <h4 className="text-xs font-mono uppercase tracking-wider font-bold text-zinc-400 flex items-center gap-2 select-none border-b border-zinc-950 pb-2">
+                      <MessageSquare className="w-4 h-4 text-[#ff5874]" />
+                      <span>Отзывы и комментарии ({comments.length})</span>
+                    </h4>
+
+                    {/* Commentary stream */}
+                    <div className="space-y-3.5 max-h-[300px] overflow-y-auto pr-2 divide-y divide-zinc-950">
+                      {comments.length > 0 ? (
+                        comments.map((comment) => (
+                          <div key={comment.id} className="pt-3.5 first:pt-0 space-y-1.5 font-sans">
+                            <div className="flex items-center justify-between font-mono text-[10px] text-zinc-500 select-none">
+                              <span className="text-emerald-400 font-bold flex items-center gap-1.5">
+                                <User className="w-3.5 h-3.5 text-zinc-650" />
+                                <span>{comment.author}</span>
+                              </span>
+                              <span className="flex items-center gap-1 text-zinc-600">
+                                <Calendar className="w-3 h-3 text-zinc-700" />
+                                <span>{new Date(comment.created_at).toLocaleString()}</span>
+                              </span>
+                            </div>
+                            <div className="bg-[#0b0c10] border border-zinc-900 rounded p-3 text-xs text-zinc-300 font-sans leading-relaxed break-words shadow-sm">
+                              {comment.text}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-zinc-650 font-mono italic text-center py-6 select-none bg-zinc-950/20 rounded border border-dashed border-zinc-900/60">Отзывов для этого поста пока нет. Вы можете оставить первый комментарий ниже.</p>
+                      )}
                     </div>
-                    <p className="text-xs text-zinc-350 leading-relaxed whitespace-pre-line font-sans">
-                      {selectedPost.description}
+
+                    {/* Add commentary card */}
+                    <form onSubmit={handleAddComment} className="pt-3.5 border-t border-zinc-900 space-y-2.5 select-none text-left">
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
+                        <div className="md:col-span-4">
+                          <input 
+                            type="text"
+                            value={newCommentAuthor}
+                            onChange={(e) => setNewCommentAuthor(e.target.value)}
+                            placeholder="Имя куратора (Аноним)"
+                            className="w-full bg-[#0a0b0d] border border-zinc-850 focus:border-zinc-750 text-xs rounded px-3 py-2 text-white focus:outline-none font-mono placeholder:text-zinc-600"
+                          />
+                        </div>
+                        <div className="md:col-span-8 flex gap-1.5">
+                          <input 
+                            type="text"
+                            required
+                            value={newCommentText}
+                            onChange={(e) => setNewCommentText(e.target.value)}
+                            placeholder="Текст комментария..."
+                            className="w-full bg-[#0a0b0d] border border-zinc-850 focus:border-zinc-750 text-xs rounded px-3 py-2 text-white focus:outline-none font-mono placeholder:text-zinc-650"
+                          />
+                          <button 
+                            type="submit"
+                            className="px-4 py-2 bg-gradient-to-r from-zinc-900 to-zinc-950 border border-zinc-800 hover:border-zinc-700 hover:text-white transition rounded font-mono font-bold text-xs shrink-0 text-zinc-350 hover:bg-zinc-850"
+                          >
+                            Отправить
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                ) : (
+                  <div className="pt-6 pb-2 border-t border-zinc-900 select-none text-center space-y-2">
+                    <ShieldCheck className="w-8 h-8 text-violet-400 mx-auto opacity-80" />
+                    <p className="text-[11px] font-mono font-bold text-zinc-300">Функция комментариев недоступна</p>
+                    <p className="text-[10px] text-zinc-500 leading-relaxed max-w-sm mx-auto">
+                      По решению администрации, комментирование временно доступно исключительно во вкладке <strong className="text-purple-400">Игры</strong>. Пообщаться с другими игроками можно в игровом хабе!
                     </p>
                   </div>
                 )}
-
-                {/* 3. DYNAMIC COMMENTS LIST IN BOORU FORMAT */}
-                <div className="space-y-4 pt-2 border-t border-zinc-900">
-                  <h4 className="text-xs font-mono uppercase tracking-wider font-bold text-zinc-400 flex items-center gap-2 select-none border-b border-zinc-950 pb-2">
-                    <MessageSquare className="w-4 h-4 text-[#ff5874]" />
-                    <span>Отзывы и комментарии ({comments.length})</span>
-                  </h4>
-
-                  {/* Commentary stream */}
-                  <div className="space-y-3.5 max-h-[300px] overflow-y-auto pr-2 divide-y divide-zinc-950">
-                    {comments.length > 0 ? (
-                      comments.map((comment) => (
-                        <div key={comment.id} className="pt-3.5 first:pt-0 space-y-1.5">
-                          <div className="flex items-center justify-between font-mono text-[10px] text-zinc-500 select-none">
-                            <span className="text-emerald-400 font-bold flex items-center gap-1.5">
-                              <User className="w-3.5 h-3.5 text-zinc-650" />
-                              <span>{comment.author}</span>
-                            </span>
-                            <span className="flex items-center gap-1 text-zinc-600">
-                              <Calendar className="w-3 h-3 text-zinc-700" />
-                              <span>{new Date(comment.created_at).toLocaleString()}</span>
-                            </span>
-                          </div>
-                          <div className="bg-[#0b0c10] border border-zinc-900 rounded p-3 text-xs text-zinc-300 font-sans leading-relaxed break-words shadow-sm">
-                            {comment.text}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-zinc-650 font-mono italic text-center py-6 select-none bg-zinc-950/20 rounded border border-dashed border-zinc-900/60">Отзывов для этого поста пока нет. Вы можете оставить первый комментарий ниже.</p>
-                    )}
-                  </div>
-
-                  {/* Add commentary card */}
-                  <form onSubmit={handleAddComment} className="pt-3.5 border-t border-zinc-900 space-y-2.5 select-none">
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
-                      <div className="md:col-span-4">
-                        <input 
-                          type="text"
-                          value={newCommentAuthor}
-                          onChange={(e) => setNewCommentAuthor(e.target.value)}
-                          placeholder="Имя куратора (Аноним)"
-                          className="w-full bg-[#0a0b0d] border border-zinc-850 focus:border-zinc-750 text-xs rounded px-3 py-2 text-white focus:outline-none font-mono placeholder:text-zinc-600"
-                        />
-                      </div>
-                      <div className="md:col-span-8 flex gap-1.5">
-                        <input 
-                          type="text"
-                          required
-                          value={newCommentText}
-                          onChange={(e) => setNewCommentText(e.target.value)}
-                          placeholder="Текст комментария..."
-                          className="w-full bg-[#0a0b0d] border border-zinc-850 focus:border-zinc-750 text-xs rounded px-3 py-2 text-white focus:outline-none font-mono placeholder:text-zinc-650"
-                        />
-                        <button 
-                          type="submit"
-                          className="px-4 py-2 bg-gradient-to-r from-zinc-900 to-zinc-950 border border-zinc-800 hover:border-zinc-700 hover:text-white transition rounded font-mono font-bold text-xs shrink-0 text-zinc-350 hover:bg-zinc-850"
-                        >
-                          Отправить
-                        </button>
-                      </div>
-                    </div>
-                  </form>
-                </div>
-
               </div>
 
             </div>

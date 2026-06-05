@@ -15,6 +15,14 @@ export interface Post {
   source_url?: string;
   description?: string;
   tags: string[]; // list of tag names
+  cover_url?: string;
+  // Game traits
+  is_game?: boolean;
+  version?: string; // e.g., 'v1.0', 'beta 5.3' Custom or default to 'Last'
+  screenshots?: string[]; // gallery of screenshot & video URLs
+  download_pc?: string; // Windows release .exe/.zip URL
+  download_mobile?: string; // Android release .apk URL
+  device_compatibility?: 'all' | 'pc' | 'mobile';
 }
 
 export interface Tag {
@@ -30,6 +38,14 @@ export interface Comment {
   text: string;
   created_at: string;
   likes: number;
+}
+
+export interface Playlist {
+  id: string;
+  name: string;
+  description: string;
+  postIds: string[];
+  created_at: string;
 }
 
 export interface DatabaseState {

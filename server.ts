@@ -300,6 +300,37 @@ app.put('/api/posts/:postId/tags', async (req, res) => {
   }
 });
 
+// 6a. UPDATE POST ALL GENERAL DETAILS & MEDIA
+app.put('/api/posts/:postId', async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { title, url, rating, source_url, description, tags, cover_url } = req.body;
+
+    if (tags) {
+      await ensureTagsExistOnServer(tags);
+    }
+
+    const { error } = await supabase
+      .from('posts')
+      .update({
+        title,
+        url,
+        rating,
+        source_url,
+        description,
+        tags,
+        cover_url
+      })
+      .eq('id', postId);
+
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error('[DATABASE] Error updating post details:', err.message || err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // 6b. EXPLICITLY CREATE/UPDATE TAG TYPE & CATEGORY
 app.post('/api/tags', async (req, res) => {
   try {

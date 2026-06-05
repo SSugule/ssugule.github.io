@@ -125,6 +125,10 @@ class SuguleDatabaseManager {
   }
 
   private updatePostTagsLocally(postId: string, tags: string[]) {
+    this.updatePostLocally(postId, { tags });
+  }
+
+  private updatePostLocally(postId: string, fields: Partial<Post>) {
     const local = localStorage.getItem('SUGULE_LOCAL_POSTS');
     let posts = INITIAL_POSTS;
     if (local) {
@@ -137,7 +141,7 @@ class SuguleDatabaseManager {
 
     posts = posts.map(p => {
       if (p.id === postId) {
-        return { ...p, tags: tags };
+        return { ...p, ...fields };
       }
       return p;
     });
@@ -336,6 +340,24 @@ class SuguleDatabaseManager {
       console.warn('Backend proxy tag update failed, saving in local offline backup:', e);
       this.updatePostTagsLocally(postId, tags);
       this.ensureTagsExistLocally(tags);
+    }
+  }
+
+  public async updatePost(postId: string, fields: Partial<Post>): Promise<void> {
+    try {
+      const response = await fetch(`/api/posts/${postId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields)
+      });
+      if (!response.ok) throw new Error('API post update failed');
+      this.updatePostLocally(postId, fields);
+    } catch (e) {
+      console.warn('Backend proxy post update failed, saving in local offline backup:', e);
+      this.updatePostLocally(postId, fields);
+      if (fields.tags) {
+        this.ensureTagsExistLocally(fields.tags);
+      }
     }
   }
 

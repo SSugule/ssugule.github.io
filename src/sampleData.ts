@@ -201,6 +201,69 @@ export const INITIAL_POSTS: Post[] = [
     created_at: '2026-05-21T14:50:00Z',
     uploader: 'MikuHype',
     tags: ['hatsune_miku', 'vocaloid', 'wlop', 'scenic', 'cherry_blossoms', 'rain', 'wallpaper', 'concept_art']
+  },
+  {
+    id: 'game_1',
+    title: 'Neon Odyssey RPG',
+    url: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&q=80&w=800',
+    rating: 'safe',
+    score: 180,
+    elo: 1600,
+    created_at: '2026-06-04T12:00:00Z',
+    uploader: 'CyberStudio',
+    source_url: 'https://github.com/example/neon-odyssey',
+    description: 'A 2D cyberpunk tactical RPG set in the glowing streets of Neo-Tokyo. Navigate through complex choices and deep grid fights.',
+    tags: ['cyberpunk', 'rpg', 'game', 'neon_lighting', 'tactical'],
+    is_game: true,
+    version: 'v1.4.2-beta',
+    screenshots: [
+      'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&q=80&w=800',
+      'https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=800',
+      'https://images.unsplash.com/photo-1541512416146-3cf58d6b27cc?auto=format&fit=crop&q=80&w=800'
+    ],
+    download_pc: 'https://example.com/neon-odyssey-pc.zip',
+    download_mobile: 'https://example.com/neon-odyssey-mobile.apk',
+    device_compatibility: 'all'
+  },
+  {
+    id: 'game_2',
+    title: 'Fantasy Quest: Pixel World',
+    url: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&q=80&w=800',
+    rating: 'safe',
+    score: 95,
+    elo: 1480,
+    created_at: '2026-06-03T10:30:00Z',
+    uploader: 'RemDev',
+    description: 'Charming retro pixel platformer compatible fully with mobile touch screens or physical gamepads. Explore deep mystical caves.',
+    tags: ['retro', 'pixels', 'game', 'platformer', 'cozy'],
+    is_game: true,
+    version: 'v0.9-alpha',
+    screenshots: [
+      'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&q=80&w=800',
+      'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&q=80&w=800'
+    ],
+    download_pc: 'https://example.com/fantasy-quest-pc.exe',
+    device_compatibility: 'pc'
+  },
+  {
+    id: 'game_3',
+    title: 'Starship Academy Touch',
+    url: 'https://images.unsplash.com/photo-1563089145-599997674d42?auto=format&fit=crop&q=80&w=800',
+    rating: 'safe',
+    score: 110,
+    elo: 1510,
+    created_at: '2026-06-02T15:45:00Z',
+    uploader: 'HelixStudio',
+    description: 'An interactive visual novel tailored specifically for smartphones with sleek adaptive swipe gestures and animated sci-fi character cards.',
+    tags: ['novel', 'interactive', 'game', 'cyberpunk', '1girl'],
+    is_game: true,
+    version: '',
+    screenshots: [
+      'https://images.unsplash.com/photo-1563089145-599997674d42?auto=format&fit=crop&q=80&w=800',
+      'https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?auto=format&fit=crop&q=80&w=800'
+    ],
+    download_mobile: 'https://example.com/starship-academy.apk',
+    device_compatibility: 'mobile'
   }
 ];
 
