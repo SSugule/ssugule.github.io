@@ -3,7 +3,7 @@
 Premium booru-style Media Database & Gallery with private passcode lock screen, clean Russian interface, and direct Supabase Cloud storage/comment integration.
 
 ## 🔗 Ссылка на сайт (GitHub Pages)
-👉 **[Открыть Sugule Database на GitHub Pages](https://ssugule.github.io/SuguleDatabase/)**
+👉 **[Открыть Sugule Database на GitHub Pages](https://ssugule.github.io/)**
 
 ---
 
