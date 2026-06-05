@@ -1,20 +1,35 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Sugule Database
 
-# Run and deploy your AI Studio app
+Premium booru-style Media Database & Gallery with private passcode lock screen, clean Russian interface, and direct Supabase Cloud storage/comment integration.
 
-This contains everything you need to run your app locally.
+## 🔗 Ссылка на сайт (GitHub Pages)
+👉 **[Открыть Sugule Database на GitHub Pages](https://ssugule.github.io/SuguleDatabase/)**
 
-View your app in AI Studio: https://ai.studio/apps/8f9d4f8c-07a9-4711-8d02-1b49a9f4a571
+---
 
-## Run Locally
+## 🛠️ Как запустить и настроить GitHub Pages в репозитории
 
-**Prerequisites:**  Node.js
+Чтобы ваш сайт заработал по этой ссылке, следуйте простой инструкции в вашем репозитории на GitHub:
 
+1. **Запустите сборку (GitHub Actions):**
+   При отправке (push) кода в ветку `main` или `master`, у вас автоматически запускается настроенная задача (workflow), которая компилирует клиентскую версию сайта и отправляет готовые файлы в новую ветку `gh-pages`. Вы можете следить за процессом во вкладке **Actions** в верхней панели вашего репозитория.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+2. **Включите GitHub Pages в настройках:**
+   После того, как сборка успешно завершится (вкладка Actions покажет зелёную галочку), в вашем репозитории появится новая автоматическая ветка `gh-pages`. Теперь нужно включить её отображение:
+   * Перейдите во вкладку **Settings** (Настройки) вашего репозитория на GitHub.
+   * В левом меню нажмите на раздел **Pages** (Страницы).
+   * В блоке **Build and deployment** (Сборка и развёртывание), в выпадающем списке **Source** (Источник) убедитесь, что выбрано **Deploy from a branch** (Развёртывание из ветки).
+   * В выпадающем списке **Branch** выберите ветку `gh-pages` (вместо `None`/`main`) и папку `/ (root)`.
+   * Нажмите кнопку **Save** (Сохранить).
+
+Спустя 1-2 минуты GitHub обновит статус и ваш сайт по адресу **https://ssugule.github.io/SuguleDatabase/** заработает в полную силу!
+
+---
+
+## ✨ Возможности проекта
+* 🔒 **Приватный экран блокировки (Passcode Lock)** — защита ваших медиа от посторонних глаз.
+* 📂 **Галерея и Буру-стиль** — умный поиск по тегам, категориям, авторам и рейтингу (Safe, Questionable, Explicit 18+).
+* 👾 **Игровой хаб (Games Hub)** — интерактивный архив с играми.
+* 🎥 **Встроенный медиаплеер** — корректное отображение артов, видео с регулировкой времени звука и воспроизведения, а также комиксов.
+* 💖 **Профиль пользователя** — любимые посты, списки воспроизведения (плейлисты), персональные настройки и избранные теги.
+* ☁️ **Интеграция с Supabase** — комментарии пользователей, отметки «Нравится», просмотры и безопасное хранение файлов.

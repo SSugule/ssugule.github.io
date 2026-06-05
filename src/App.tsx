@@ -2682,10 +2682,10 @@ export default function App() {
                     <div 
                       onTouchStart={handleTouchStart}
                       onTouchEnd={handleTouchEnd}
-                      className={`bg-black/95 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[260px] sm:min-h-[360px] transition-all duration-300 select-none shadow-2xl shadow-black/80 w-full ${
+                      className={`bg-black/95 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[220px] sm:min-h-[300px] transition-all duration-300 select-none shadow-2xl shadow-black/80 w-full ${
                         isZoomed 
                           ? 'max-h-none overflow-y-auto max-w-5xl' 
-                          : 'max-h-[65vh] md:max-h-[70vh] overflow-hidden max-w-4xl'
+                          : 'max-h-[65vh] md:max-h-[75vh] overflow-hidden max-w-4xl'
                       }`}
                     >
                         {/* Interactive nav chevrons on sides */}
@@ -2696,7 +2696,7 @@ export default function App() {
                           <ChevronLeft className="w-5 h-5" />
                         </button>
  
-                        <div className="w-full flex-grow flex items-center justify-center relative min-h-[220px] sm:min-h-[320px]">
+                        <div className="w-full flex-grow flex items-center justify-center relative min-h-[180px] sm:min-h-[260px]">
                           {/* Left / Right active overlay flip zones (DISABLED FOR VIDEOS OR WHEN ZOOMED) */}
                           {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && !isZoomed && (
                             <>
@@ -2721,7 +2721,7 @@ export default function App() {
                               autoPlay 
                               loop 
                               playsInline 
-                              className="max-h-[55vh] md:max-h-[60vh] w-auto max-w-full rounded-xl object-contain relative z-10 shadow-lg"
+                              className="max-h-[48vh] md:max-h-[55vh] w-auto max-w-full rounded-xl object-contain relative z-10 shadow-lg"
                             />
                           ) : isUrlDownloadable(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) ? (
                             <div className="flex flex-col items-center justify-center p-6 bg-[#0b0f19] border border-zinc-800 rounded-2xl space-y-4 max-w-md w-full relative z-30 text-center select-text shadow-xl">
@@ -2758,12 +2758,12 @@ export default function App() {
                               className={`${
                                 isZoomed 
                                   ? 'w-full h-auto max-w-none max-h-none cursor-zoom-out' 
-                                  : 'max-h-[55vh] md:max-h-[60vh] w-auto max-w-full cursor-zoom-in'
+                                  : 'max-h-[50vh] md:max-h-[58vh] w-auto max-w-full cursor-zoom-in'
                               } rounded-xl object-contain relative z-10 shadow-lg h-auto transition-all duration-300`}
                             />
                           )}
                         </div>
-
+ 
                         {/* Expandable scale zoom action overlay indicator */}
                         {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && !isUrlDownloadable(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && (
                           <button
@@ -2775,16 +2775,16 @@ export default function App() {
                             <span>{isZoomed ? "Вписать" : "100% размер"}</span>
                           </button>
                         )}
-
+ 
                         <button 
                           onClick={handleNextAction}
                           className="absolute right-4 top-1/2 -translate-y-1/2 p-2.5 rounded-full bg-black/85 border border-zinc-855 hover:border-violet-500 hover:text-white text-zinc-400 transition opacity-0 group-hover:opacity-100 focus:opacity-100 z-30 hidden sm:flex cursor-pointer"
                         >
                           <ChevronRight className="w-5 h-5" />
                         </button>
-
+ 
                         {/* Floating page reference indicator */}
-                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/95 border border-zinc-850 px-4 py-1.5 rounded-full text-[10px] font-mono text-zinc-400 shadow-xl z-30 whitespace-nowrap">
+                        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/95 border border-zinc-850 px-4 py-1.5 rounded-full text-[10px] font-mono text-zinc-400 shadow-xl z-30 whitespace-nowrap">
                           {isPostComic(selectedPost) ? (
                             <span>Страница <strong>{currentComicPage + 1}</strong> из <strong>{getComicPages(selectedPost).length}</strong></span>
                           ) : (
