@@ -87,6 +87,13 @@ export default function App() {
   const [isAuthorized, setIsAuthorized] = useState(true);
   const [passcodeError, setPasscodeError] = useState('');
 
+  // Password Recovery / Reset states
+  const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+  const [recoveryPassword, setRecoveryPassword] = useState('');
+  const [recoveryError, setRecoveryError] = useState('');
+  const [recoverySuccess, setRecoverySuccess] = useState('');
+  const [isSavingRecovery, setIsSavingRecovery] = useState(false);
+
   // Lockscreen Auth integration
   const [lockTab, setLockTab] = useState<'passcode' | 'supabase'>('passcode');
   const [lockMode, setLockMode] = useState<'login' | 'signup'>('login');
@@ -382,6 +389,20 @@ export default function App() {
       const conf = dbManager.getConfiguration();
       setSupabaseConfig(conf);
 
+      // Detect password reset recovery flow in Hash parameters
+      if (typeof window !== 'undefined' && window.location.hash) {
+        const hash = window.location.hash.slice(1);
+        const hashParams = new URLSearchParams(hash);
+        const accessToken = hashParams.get('access_token');
+        const typeParam = hashParams.get('type');
+        
+        if (typeParam === 'recovery' || accessToken) {
+          console.log('[RECOVERY] Detected recovery link back from email! Enabling recovery mode dialog.');
+          setShowRecoveryDialog(true);
+          setActiveTab('profile');
+        }
+      }
+
       const savedViews = localStorage.getItem('sugule_recent_views');
       if (savedViews) {
         try {
@@ -485,6 +506,33 @@ export default function App() {
     setIsSignedUp(false);
     setUsername('');
     localStorage.removeItem('sugule_username');
+  };
+
+  const handleSaveRecoveryPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const pass = recoveryPassword.trim();
+    if (pass.length < 6) {
+      setRecoveryError('Пароль должен состоять минимум из 6 символов.');
+      return;
+    }
+    setRecoveryError('');
+    setRecoverySuccess('');
+    setIsSavingRecovery(true);
+    try {
+      await dbManager.updatePassword(pass);
+      setRecoverySuccess('Ваш пароль успешно изменен! Вы можете продолжать работу с сайтом.');
+      setRecoveryPassword('');
+      setTimeout(() => {
+        if (typeof window !== 'undefined') {
+          window.location.hash = '';
+        }
+        setShowRecoveryDialog(false);
+      }, 5000);
+    } catch (err: any) {
+      setRecoveryError(`Ошибка смены пароля: ${err.message || err}`);
+    } finally {
+      setIsSavingRecovery(false);
+    }
   };
 
   const handleLockSupabaseSubmit = async (e: React.FormEvent) => {
@@ -4409,6 +4457,55 @@ export default function App() {
 
           </div>
 
+        </div>
+      )}
+
+      {/* PASSWORD RECOVERY DIALOG */}
+      {showRecoveryDialog && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[99999] flex items-center justify-center p-4">
+          <div className="bg-[#0b0c11] border border-zinc-800 rounded-2xl max-w-md w-full p-6 md:p-8 space-y-6 shadow-2xl relative">
+            <h3 className="text-xl font-black text-white tracking-widest uppercase flex items-center gap-2">
+              <span className="text-emerald-400">🔑</span> Сброс и смена пароля
+            </h3>
+            
+            <p className="text-xs text-zinc-400 leading-relaxed font-mono">
+              Вы успешно перешли по ссылке из вашего электронного письма для восстановления пароля. Пожалуйста, введите ваш новый безопасный пароль ниже.
+            </p>
+
+            <form onSubmit={handleSaveRecoveryPassword} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-mono tracking-widest text-zinc-400 block uppercase font-bold text-left">Новый пароль</label>
+                <input 
+                  type="password"
+                  required
+                  value={recoveryPassword}
+                  onChange={(e) => setRecoveryPassword(e.target.value)}
+                  placeholder="Минимум 6 символов..."
+                  className="w-full bg-black/40 border border-zinc-850 focus:border-violet-500 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-650 focus:outline-none"
+                />
+              </div>
+
+              {recoveryError && (
+                <div className="p-3 bg-red-950/70 border border-red-900 text-red-400 text-xs font-mono rounded-xl leading-relaxed text-left">
+                  ⚠️ {recoveryError}
+                </div>
+              )}
+
+              {recoverySuccess && (
+                <div className="p-3 bg-emerald-950/70 border border-emerald-900 text-emerald-400 text-xs font-mono rounded-xl leading-relaxed text-left">
+                  🟢 {recoverySuccess}
+                </div>
+              )}
+
+              <button 
+                type="submit"
+                disabled={isSavingRecovery}
+                className="w-full py-3 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 font-bold rounded-xl transition cursor-pointer font-mono text-xs tracking-wider uppercase shadow-lg shadow-violet-900/40"
+              >
+                {isSavingRecovery ? 'Сохранение...' : 'Установить новый пароль'}
+              </button>
+            </form>
+          </div>
         </div>
       )}
 

@@ -10,8 +10,8 @@ class SuguleDatabaseManager {
   private directSupabase: any = null;
   private useProxyMode: boolean = true;
   
-  private rawUrl: string = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-  private rawKey: string = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+  private rawUrl: string = (typeof window !== 'undefined' ? localStorage.getItem('sugule_custom_supabase_url') : '') || (import.meta as any).env?.VITE_SUPABASE_URL || '';
+  private rawKey: string = (typeof window !== 'undefined' ? localStorage.getItem('sugule_custom_supabase_key') : '') || (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
 
   // Fallback options (matching server-side defaults for flawless client-side connection)
   private fallbackUrl = 'https://erularobdstwkqtfemwh.supabase.co';
@@ -115,6 +115,23 @@ class SuguleDatabaseManager {
     }
   }
 
+  public async resetPasswordForEmail(email: string) {
+    if (!this.directSupabase) throw new Error('Supabase client is not initialized.');
+    const redirectToUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
+    const { data, error } = await this.directSupabase.auth.resetPasswordForEmail(email, {
+      redirectTo: redirectToUrl
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  public async updatePassword(password: string) {
+    if (!this.directSupabase) throw new Error('Supabase client is not initialized.');
+    const { data, error } = await this.directSupabase.auth.updateUser({ password });
+    if (error) throw error;
+    return data;
+  }
+
   private initDirectClient() {
     const stripQuotes = (str: string) => {
       let s = str ? str.trim() : '';
@@ -156,13 +173,18 @@ class SuguleDatabaseManager {
   }
 
   public saveConfiguration(url: string, key: string) {
-    if (this.useProxyMode) {
-      console.log('Secure Proxy: Ignoring manual credentials override to protect system stability.');
-    } else {
-      this.rawUrl = this.parseSupabaseUrl(url);
-      this.rawKey = key;
-      this.initDirectClient();
+    this.rawUrl = this.parseSupabaseUrl(url);
+    this.rawKey = key;
+    if (typeof window !== 'undefined') {
+      if (url && key) {
+        localStorage.setItem('sugule_custom_supabase_url', this.rawUrl);
+        localStorage.setItem('sugule_custom_supabase_key', this.rawKey);
+      } else {
+        localStorage.removeItem('sugule_custom_supabase_url');
+        localStorage.removeItem('sugule_custom_supabase_key');
+      }
     }
+    this.initDirectClient();
     return true;
   }
 
@@ -1100,7 +1122,21 @@ class SuguleDatabaseManager {
   }
 
   public getSqlInstructions(): string {
-    return ``;
+    return `-- Скрипт подготовки базы данных Supabase для работы с Sugule Booru
+-- Выполните этот SQL-скрипт в панели SQL Editor вашего проекта Supabase
+
+-- 1. Снятие политик RLS для публичного чтения и записи клиентами в браузере
+ALTER TABLE posts DISABLE ROW LEVEL SECURITY;
+ALTER TABLE tags DISABLE ROW LEVEL SECURITY;
+ALTER TABLE comments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE favorites DISABLE ROW LEVEL SECURITY;
+ALTER TABLE post_votes DISABLE ROW LEVEL SECURITY;
+
+-- 2. Обеспечение начальной структуры таблиц и индексов
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INT4 DEFAULT 0;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS elo INT4 DEFAULT 1500;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS rating VARCHAR(10) DEFAULT 'general';
+`;
   }
 }
 

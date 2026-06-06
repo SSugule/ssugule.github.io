@@ -72,6 +72,10 @@ export const UserProfile: React.FC<UserProfileProps> = ({
   const [setNewPasswordVal, setSetNewPasswordVal] = useState('');
   const [setNewVerifyVal, setSetNewVerifyVal] = useState('');
 
+  // Custom manual Supabase config states
+  const [customSupaUrl, setCustomSupaUrl] = useState(() => localStorage.getItem('sugule_custom_supabase_url') || '');
+  const [customSupaKey, setCustomSupaKey] = useState(() => localStorage.getItem('sugule_custom_supabase_key') || '');
+
   // File Upload refs & state
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
@@ -280,17 +284,23 @@ export const UserProfile: React.FC<UserProfileProps> = ({
   };
 
   // RESET PASSWORD ACTION
-  const handleResetPassword = (e: React.FormEvent) => {
+  const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!rpEmail.trim().includes('@')) {
+    const cleanEmail = rpEmail.trim();
+    if (!cleanEmail.includes('@')) {
       triggerNotification('error', 'Введите правильный Email-адрес.');
       return;
     }
-    triggerNotification('success', `Выслана ссылка для восстановления. Email: ${rpEmail.trim()}`);
-    setRpEmail('');
-    setTimeout(() => {
-      setAuthView('signin');
-    }, 2000);
+    try {
+      await dbManager.resetPasswordForEmail(cleanEmail);
+      triggerNotification('success', `Инструкции по сбросу пароля успешно отправлены на ${cleanEmail}! Проверьте также папку "Спам", если письмо не приходит.`);
+      setRpEmail('');
+      setTimeout(() => {
+        setAuthView('signin');
+      }, 5000);
+    } catch (err: any) {
+      triggerNotification('error', `Не удалось отправить письмо: ${err.message || err}`);
+    }
   };
 
   // NICKNAME UPDATE
@@ -320,6 +330,26 @@ export const UserProfile: React.FC<UserProfileProps> = ({
   const handleUpdateDesc = () => {
     localStorage.setItem('sugule_profile_desc', userDesc);
     triggerNotification('success', 'Описание профиля сохранено.');
+  };
+
+  const handleSaveCustomSupabase = () => {
+    const url = customSupaUrl.trim();
+    const key = customSupaKey.trim();
+    if (!url || !key) {
+      triggerNotification('error', 'Пожалуйста, введите оба параметра: Supabase URL и Anon Key.');
+      return;
+    }
+    dbManager.saveConfiguration(url, key);
+    triggerNotification('success', 'Настройки Supabase успешно сохранены и применены! Перезагрузите страницу для применения.');
+  };
+
+  const handleResetCustomSupabase = () => {
+    localStorage.removeItem('sugule_custom_supabase_url');
+    localStorage.removeItem('sugule_custom_supabase_key');
+    setCustomSupaUrl('');
+    setCustomSupaKey('');
+    dbManager.saveConfiguration('', '');
+    triggerNotification('success', 'Настройки Supabase сброшены на значения по умолчанию! Перезагрузите страницу.');
   };
 
   // EMAIL UPDATE
@@ -1650,6 +1680,72 @@ export const UserProfile: React.FC<UserProfileProps> = ({
                 >
                   Обновить Password
                 </button>
+              </div>
+
+              {/* Row 4.5: MANUAL SUPABASE CONNECTION OVERRIDE */}
+              <div className="bg-[#0b0c11] border border-zinc-900 rounded-xl p-4 space-y-4">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-mono tracking-widest text-[#52b788] block uppercase font-bold text-left">📡 Подключение к вашему Supabase</span>
+                  <p className="text-[11px] text-zinc-400 font-sans leading-relaxed text-left">
+                    Если вы используете статическое развертывание (например, на <strong>GitHub Pages (ssugule.github.io)</strong>) и ваши посты не подгружаются, это может происходить из-за ограничений безопасности RLS или отсутствия переменных окружения при сборке. Здесь вы можете ввести свои персональные ключи прямо в браузере, чтобы гарантировать работоспособность!
+                  </p>
+                </div>
+                
+                <div className="space-y-3.5 select-text">
+                  <div className="space-y-1 text-left">
+                    <span className="text-[9.5px] font-mono text-zinc-400 uppercase font-bold">Supabase Project URL</span>
+                    <input 
+                      type="text" 
+                      placeholder="https://your-project.supabase.co"
+                      value={customSupaUrl}
+                      onChange={(e) => setCustomSupaUrl(e.target.value)}
+                      className="w-full bg-black/50 border border-zinc-850 focus:border-emerald-500 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  <div className="space-y-1 text-left">
+                    <span className="text-[9.5px] font-mono text-zinc-400 uppercase font-bold">Supabase Anon key / Public key</span>
+                    <input 
+                      type="password" 
+                      placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+                      value={customSupaKey}
+                      onChange={(e) => setCustomSupaKey(e.target.value)}
+                      className="w-full bg-black/50 border border-zinc-850 focus:border-emerald-500 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-1.5">
+                  <button
+                    type="button"
+                    onClick={handleSaveCustomSupabase}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-mono text-[10px] font-bold tracking-wider uppercase cursor-pointer transition shadow"
+                  >
+                    Сохранить и подключиться напрямую
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleResetCustomSupabase}
+                    className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 rounded font-mono text-[10px] font-bold tracking-wider uppercase cursor-pointer transition shadow"
+                  >
+                    Сбросить на значения по умолчанию
+                  </button>
+                </div>
+
+                <div className="mt-3.5 p-3.5 bg-zinc-950 border border-zinc-900 rounded-lg space-y-2 select-text">
+                  <span className="text-[9.5px] font-mono text-[#ff5874] uppercase font-bold block text-left">💡 Важный совет (Row-Level Security - RLS)</span>
+                  <p className="text-[10px] text-zinc-500 leading-normal font-sans text-left">
+                    Для корректной работы напрямую на GitHub Pages отключите RLS или создайте публичные политики чтения/записи для таблиц <code>posts</code>, <code>tags</code>, <code>comments</code> и <code>favorites</code> в SQL Editor вашей панели управления Supabase, совершив команды:
+                  </p>
+                  <pre className="text-[9px] font-mono text-zinc-400 bg-black p-2 rounded overflow-x-auto border border-zinc-900 leading-relaxed max-h-[140px] text-left">
+{`ALTER TABLE posts DISABLE ROW LEVEL SECURITY;
+ALTER TABLE tags DISABLE ROW LEVEL SECURITY;
+ALTER TABLE comments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE favorites DISABLE ROW LEVEL SECURITY;
+ALTER TABLE post_votes DISABLE ROW LEVEL SECURITY;`}
+                  </pre>
+                </div>
               </div>
 
               {/* Row 5: Permanently Delete Account danger zone */}
