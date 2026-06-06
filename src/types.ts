@@ -16,6 +16,7 @@ export interface Post {
   description?: string;
   tags: string[]; // list of tag names
   cover_url?: string;
+  views?: number;
   // Game traits
   is_game?: boolean;
   version?: string; // e.g., 'v1.0', 'beta 5.3' Custom or default to 'Last'

@@ -87,6 +87,14 @@ export default function App() {
   const [isAuthorized, setIsAuthorized] = useState(true);
   const [passcodeError, setPasscodeError] = useState('');
 
+  // Lockscreen Auth integration
+  const [lockTab, setLockTab] = useState<'passcode' | 'supabase'>('passcode');
+  const [lockMode, setLockMode] = useState<'login' | 'signup'>('login');
+  const [lockEmail, setLockEmail] = useState('');
+  const [lockPassword, setLockPassword] = useState('');
+  const [lockUsername, setLockUsername] = useState('');
+  const [lockFeedback, setLockFeedback] = useState<{type: 'success'|'error', text: string} | null>(null);
+
   // Main application data states
   const [posts, setPosts] = useState<Post[]>(INITIAL_POSTS);
   const [tags, setTagsState] = useState<Tag[]>(() => {
@@ -406,9 +414,20 @@ export default function App() {
   const loadDatabase = async (silent = false) => {
     if (!silent) setIsLoadingDb(true);
     try {
+      // Direct session sync on boot to support seamless persistent user logins
+      const currentUser = await dbManager.getCurrentUser();
+      if (currentUser) {
+        dbManager.setActiveUserId(currentUser.id);
+        const name = currentUser.user_metadata?.username || currentUser.email || currentUser.id;
+        setUsername(name);
+        setIsSignedUp(true);
+        setIsAuthorized(true);
+      }
+
       const fetchedPosts = await dbManager.getPosts();
       const fetchedTags = await dbManager.getTags();
       const fetchedFavs = await dbManager.getFavorites();
+      const fetchedVotes = await dbManager.getUserVotes();
       
       const sanitizePosts = (items: Post[] | null): Post[] => {
         if (!items) return [];
@@ -428,6 +447,7 @@ export default function App() {
         setTags(fetchedTags && fetchedTags.length > 0 ? fetchedTags : INITIAL_TAGS);
       }
       setFavorites(fetchedFavs || []);
+      setUserVotes(fetchedVotes || {});
     } catch (e) {
       console.error('Error fetching data from Supabase:', e);
       if (!silent) {
@@ -454,10 +474,68 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await dbManager.signOut();
+    } catch {}
+    dbManager.setActiveUserId('');
     setIsAuthorized(false);
     setPasscode('');
     localStorage.removeItem('sugule_authorized');
+    setIsSignedUp(false);
+    setUsername('');
+    localStorage.removeItem('sugule_username');
+  };
+
+  const handleLockSupabaseSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLockFeedback(null);
+    try {
+      if (lockMode === 'signup') {
+        const cleanUser = lockUsername.trim().toLowerCase().replace(/\s+/g, '_');
+        if (!cleanUser) {
+          setLockFeedback({ type: 'error', text: 'Имя пользователя не может быть пустым.' });
+          return;
+        }
+        if (lockPassword.length < 6) {
+          setLockFeedback({ type: 'error', text: 'Пароль должен состоять минимум из 6 символов.' });
+          return;
+        }
+        const { data, error } = await dbManager.signUp(lockEmail.trim(), lockPassword);
+        if (error) {
+          setLockFeedback({ type: 'error', text: `Ошибка регистрации: ${error.message}` });
+          return;
+        }
+        if (data?.user) {
+          dbManager.setActiveUserId(data.user.id);
+        }
+        localStorage.setItem('sugule_username', cleanUser);
+        localStorage.setItem('sugule_profile_nickname', lockUsername.trim());
+        localStorage.setItem('sugule_profile_email', lockEmail.trim());
+        setUsername(cleanUser);
+        setIsSignedUp(true);
+        setIsAuthorized(true);
+        setLockFeedback({ type: 'success', text: 'Регистрация прошла успешно!' });
+      } else {
+        const { data, error } = await dbManager.signIn(lockEmail.trim(), lockPassword);
+        if (error) {
+          setLockFeedback({ type: 'error', text: `Ошибка входа: ${error.message}` });
+          return;
+        }
+        const user = data?.user;
+        if (user) {
+          dbManager.setActiveUserId(user.id);
+          const userNick = user.user_metadata?.username || user.email?.split('@')[0] || 'Member';
+          localStorage.setItem('sugule_username', userNick);
+          localStorage.setItem('sugule_profile_email', user.email || '');
+          setUsername(userNick);
+          setIsSignedUp(true);
+          setIsAuthorized(true);
+        }
+      }
+    } catch (err: any) {
+      setLockFeedback({ type: 'error', text: `Критический сбой: ${err.message || err}` });
+    }
   };
 
   // Load more items triggers inside scroll when infinite pagination option gets toggled
@@ -577,11 +655,9 @@ export default function App() {
     }).slice(0, 15);
   }, [tagInputText, tags]);
 
-  // Helper to calculate mock views based on post properties
+  // Helper to retrieve live views count directly from database column
   const getPostViews = (post: Post) => {
-    const titleText = post.title || post.id || '';
-    const codeSum = titleText.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    return (post.score * 15) + (codeSum % 900) + 120;
+    return post.views || 0;
   };
 
   // Helper to determine styling for hot tags based on their category
@@ -853,6 +929,12 @@ export default function App() {
       localStorage.setItem('sugule_recent_views', JSON.stringify(updated));
       return updated;
     });
+
+    // Increment views dynamically in Supabase too
+    dbManager.incrementViews(post.id).then(newViews => {
+      setPosts(prevPosts => prevPosts.map(p => p.id === post.id ? { ...p, views: newViews } : p));
+      setSelectedPost(prev => prev && prev.id === post.id ? { ...prev, views: newViews } : prev);
+    }).catch(err => console.error('Views increment error:', err));
 
     // Populate dynamic media dimensions/size details
     const charCodeSum = post.id.split('').reduce((acc, current) => acc + current.charCodeAt(0), 0);
@@ -1142,7 +1224,7 @@ export default function App() {
     }
 
     try {
-      const newScore = await dbManager.votePost(postId, delta);
+      const newScore = await dbManager.votePost(postId, delta, nextVote);
       
       setUserVotes(prev => {
         const updated = { ...prev };
@@ -1585,13 +1667,13 @@ export default function App() {
   if (!isAuthorized) {
     return (
       <div className="min-h-screen bg-[#07080a] flex items-center justify-center p-4 select-none font-sans">
-        <div className="bg-[#0f1115] border-2 border-emerald-500/30 w-full max-w-md rounded-2xl p-8 shadow-2xl relative overflow-hidden">
+        <div className="bg-[#0f1115] border-2 border-emerald-500/30 w-full max-w-md rounded-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
           
           <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-emerald-500 via-teal-400 to-indigo-500" />
           
           <div className="text-center space-y-4">
-            <div className="w-14 h-14 bg-emerald-505/10 rounded-full border border-emerald-500/20 flex items-center justify-center mx-auto shadow-lg bg-emerald-950/30">
-              <Lock className="w-6 h-6 text-emerald-400" />
+            <div className="w-12 h-12 bg-emerald-950/30 rounded-full border border-emerald-500/20 flex items-center justify-center mx-auto shadow-lg">
+              <Lock className="w-5 h-5 text-emerald-400" />
             </div>
             
             <div className="space-y-1">
@@ -1599,42 +1681,150 @@ export default function App() {
               <p className="text-xs text-zinc-400 font-mono">Вход ограничен • Закрытое сообщество</p>
             </div>
 
-            <p className="text-xs text-zinc-400 leading-relaxed pt-2">
-              Этот ресурс создан для узкого круга лиц. Пожалуйста, введите персональный пароль доступа для работы с медиаархивом и сохранения файлов.
-            </p>
-
-            <form onSubmit={handlePasscodeSubmit} className="space-y-4 pt-4">
-              <div className="space-y-1.5">
-                <input 
-                  type="password"
-                  value={passcode}
-                  onChange={(e) => setPasscode(e.target.value)}
-                  placeholder="Пароль доступа..."
-                  className="w-full text-center bg-[#07080a] border border-zinc-700/80 rounded-lg px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono focus:ring-1 focus:ring-emerald-500/30"
-                  required
-                />
-              </div>
-
-              <div className="flex items-center justify-center gap-1.5 pt-1 font-mono text-[10px] text-emerald-400/90">
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Запомнить меня на этом устройстве</span>
-              </div>
-
-              {passcodeError && (
-                <p className="text-xs text-rose-400 font-mono">{passcodeError}</p>
-              )}
-
+            {/* TAB SELECTOR */}
+            <div className="grid grid-cols-2 p-1 bg-zinc-950 rounded-lg border border-zinc-900 font-mono text-[11px] select-none">
               <button
-                type="submit"
-                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-semibold py-2.5 rounded-lg text-xs tracking-wider uppercase transition shadow-lg shadow-emerald-950/40"
+                type="button"
+                onClick={() => { setLockTab('passcode'); setLockFeedback(null); }}
+                className={`py-1.5 rounded-md transition ${lockTab === 'passcode' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
-                Подтвердить доступ
+                Код доступа
               </button>
-            </form>
-
-            <div className="pt-6 border-t border-zinc-900 text-[10px] text-zinc-500 font-mono">
-              Подсказка: Код по умолчанию: <span className="text-zinc-400">sugule</span>
+              <button
+                type="button"
+                onClick={() => { setLockTab('supabase'); setLockFeedback(null); }}
+                className={`py-1.5 rounded-md transition ${lockTab === 'supabase' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'}`}
+              >
+                Supabase Auth
+              </button>
             </div>
+
+            {lockTab === 'passcode' ? (
+              <>
+                <p className="text-xs text-zinc-400 leading-relaxed pt-1">
+                  Этот ресурс создан для узкого круга лиц. Пожалуйста, введите персональный пароль доступа для работы с медиаархивом.
+                </p>
+
+                <form onSubmit={handlePasscodeSubmit} className="space-y-4 pt-2">
+                  <div className="space-y-1.5">
+                    <input 
+                      type="password"
+                      value={passcode}
+                      onChange={(e) => setPasscode(e.target.value)}
+                      placeholder="Пароль доступа..."
+                      className="w-full text-center bg-[#07080a] border border-zinc-700/80 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono focus:ring-1 focus:ring-emerald-500/30"
+                      required
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-center gap-1.5 pt-0.5 font-mono text-[10px] text-emerald-400/90">
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Запомнить меня на этом устройстве</span>
+                  </div>
+
+                  {passcodeError && (
+                    <p className="text-xs text-rose-400 font-mono">{passcodeError}</p>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-semibold py-2.5 rounded-lg text-xs tracking-wider uppercase transition shadow-lg"
+                  >
+                    Подтвердить доступ
+                  </button>
+                </form>
+
+                <div className="pt-4 border-t border-zinc-900 text-[10px] text-zinc-500 font-mono">
+                  Подсказка: Код по умолчанию: <span className="text-zinc-400 font-bold">sugule</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-zinc-400 leading-relaxed pt-1">
+                  Войдите или зарегистрируйтесь с вашей учетной записью через официальный Supabase API для персонального профиля.
+                </p>
+
+                <form onSubmit={handleLockSupabaseSubmit} className="space-y-3.5 pt-2 text-left select-text">
+                  {lockMode === 'signup' && (
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono font-semibold text-zinc-400 uppercase tracking-wider">Никнейм</label>
+                      <input 
+                        type="text"
+                        value={lockUsername}
+                        onChange={(e) => setLockUsername(e.target.value)}
+                        placeholder="Например, art_enjoyer"
+                        className="w-full bg-[#07080a] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono select-text"
+                        required
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono font-semibold text-zinc-400 uppercase tracking-wider">Email-адрес</label>
+                    <input 
+                      type="email"
+                      value={lockEmail}
+                      onChange={(e) => setLockEmail(e.target.value)}
+                      placeholder="your-email@sugule.com"
+                      className="w-full bg-[#07080a] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono select-text"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono font-semibold text-zinc-400 uppercase tracking-wider">Пароль</label>
+                    <input 
+                      type="password"
+                      value={lockPassword}
+                      onChange={(e) => setLockPassword(e.target.value)}
+                      placeholder="Минимум 6 символов..."
+                      className="w-full bg-[#07080a] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono select-text"
+                      required
+                    />
+                  </div>
+
+                  {lockFeedback && (
+                    <p className={`text-xs font-mono text-center ${lockFeedback.type === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {lockFeedback.text}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-semibold py-2.5 rounded-lg text-xs tracking-wider uppercase transition shadow-lg"
+                  >
+                    {lockMode === 'login' ? 'Войти по Email' : 'Зарегистрировать профиль'}
+                  </button>
+
+                  <div className="text-center pt-1 font-mono text-[10px]">
+                    {lockMode === 'login' ? (
+                      <span className="text-zinc-550">
+                        Нет аккаунта?{' '}
+                        <button
+                          type="button"
+                          onClick={() => { setLockMode('signup'); setLockFeedback(null); }}
+                          className="text-emerald-400 hover:underline font-bold"
+                        >
+                          Регистрация
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="text-zinc-550">
+                        Уже есть аккаунт?{' '}
+                        <button
+                          type="button"
+                          onClick={() => { setLockMode('login'); setLockFeedback(null); }}
+                          className="text-emerald-400 hover:underline font-bold"
+                        >
+                          Войти
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                </form>
+              </>
+            )}
+
           </div>
         </div>
       </div>

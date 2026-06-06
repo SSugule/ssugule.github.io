@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { createClient } from '@supabase/supabase-js';
 import { INITIAL_POSTS, INITIAL_TAGS, INITIAL_COMMENTS } from './src/sampleData';
+import pg from 'pg';
 
 dotenv.config();
 
@@ -20,10 +21,23 @@ const stripQuotes = (str: string) => {
   return s;
 };
 
+// Auto-converts postgresql database URL string to Supabase API endpoint string
+const parseSupabaseUrl = (url: string): string => {
+  if (!url) return '';
+  url = url.trim();
+  if (url.startsWith('postgresql://') || url.startsWith('postgres://')) {
+    const match = url.match(/db\.([a-z0-9]+)\.supabase\.co/i);
+    if (match && match[1]) {
+      return `https://${match[1]}.supabase.co`;
+    }
+  }
+  return url;
+};
+
 const rawUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const rawKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 
-let supabaseUrl = stripQuotes(rawUrl);
+let supabaseUrl = parseSupabaseUrl(stripQuotes(rawUrl));
 let supabaseKey = stripQuotes(rawKey);
 
 const fallbackUrl = 'https://erularobdstwkqtfemwh.supabase.co';
@@ -50,6 +64,59 @@ try {
   supabase = createClient(fallbackUrl, fallbackKey, {
     auth: { persistSession: false }
   });
+}
+
+// Automatically ensure required columns and tables exist in their postgres/Supabase database
+async function runDatabaseMigrations() {
+  const rawUrlStr = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  if (!rawUrlStr || !rawUrlStr.startsWith('postgres')) {
+    console.log('[MIGRATION] No local PostgreSQL connection URL string found. Skipping database schema migrations.');
+    return;
+  }
+  // Remove password brackets if present in URL
+  const connectionString = rawUrlStr.replace(':[', ':').replace(']@', '@');
+  const client = new pg.Client({ connectionString });
+  try {
+    await client.connect();
+    console.log('[MIGRATION] Connected to PostgreSQL. Checking tables integrity...');
+    
+    // 1. Alter posts table to add views column if missing
+    await client.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INT4 DEFAULT 0;`);
+    console.log('[MIGRATION] Checked: posts.views column (OK)');
+
+    // 2. Create favorites table if not exists
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS favorites (
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (user_id, post_id)
+      );
+    `);
+    console.log('[MIGRATION] Checked: favorites table (OK)');
+
+    // 3. Create post_votes table if not exists for real user upvotes and downvotes
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS post_votes (
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        vote_type TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (user_id, post_id)
+      );
+    `);
+    console.log('[MIGRATION] Checked: post_votes table (OK)');
+
+    console.log('[MIGRATION] Schema migrations completed successfully!');
+  } catch (err: any) {
+    console.error('[MIGRATION] Run migrations warning/failure:', err.message);
+  } finally {
+    try {
+      await client.end();
+    } catch (e) {}
+  }
 }
 
 // Auto-create "media" public bucket if it does not already exist on Supabase Storage
@@ -371,11 +438,98 @@ app.post('/api/tags', async (req, res) => {
   }
 });
 
+// --- FAVORITES, VOTES, VIEWS ENDPOINTS ---
+
+// GET FAVORITES
+app.get('/api/favorites', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+    const { data, error } = await supabase
+      .from('favorites')
+      .select('post_id')
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    const postIds = (data || []).map((item: any) => item.post_id);
+    return res.json(postIds);
+  } catch (err: any) {
+    console.error('[DATABASE] Error getting favorites:', err.message || err);
+    return res.json([]);
+  }
+});
+
+// TOGGLE FAVORITE
+app.post('/api/favorites/toggle', async (req, res) => {
+  try {
+    const { userId, postId, isAdding } = req.body;
+    if (!userId || !postId) return res.status(400).json({ error: 'userId and postId are required' });
+
+    if (isAdding) {
+      const { error } = await supabase
+        .from('favorites')
+        .insert([{ user_id: userId, post_id: postId }]);
+      // Ignore duplicate insert errors gracefully (UNIQUE constraint helper)
+      if (error && !error.message.includes('duplicate')) throw error;
+    } else {
+      const { error } = await supabase
+        .from('favorites')
+        .delete()
+        .eq('user_id', userId)
+        .eq('post_id', postId);
+      if (error) throw error;
+    }
+
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error('[DATABASE] Error toggling favorite:', err.message || err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET VOTES
+app.get('/api/votes', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+    const { data, error } = await supabase
+      .from('post_votes')
+      .select('post_id, vote_type')
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    const votes: Record<string, string> = {};
+    (data || []).forEach((item: any) => {
+      votes[item.post_id] = item.vote_type;
+    });
+    return res.json(votes);
+  } catch (err: any) {
+    console.error('[DATABASE] Error getting user votes:', err.message || err);
+    return res.json({});
+  }
+});
+
 // 7. VOTE ON A POST
 app.post('/api/posts/:postId/vote', async (req, res) => {
   try {
     const { postId } = req.params;
-    const { scoreDelta } = req.body;
+    const { scoreDelta, userId, voteType } = req.body;
+
+    if (userId && voteType !== undefined) {
+      if (voteType === null) {
+        await supabase
+          .from('post_votes')
+          .delete()
+          .eq('user_id', userId)
+          .eq('post_id', postId);
+      } else {
+        await supabase
+          .from('post_votes')
+          .upsert({ user_id: userId, post_id: postId, vote_type: voteType }, { onConflict: 'user_id,post_id' });
+      }
+    }
 
     const { data: current, error: fetchErr } = await supabase
       .from('posts')
@@ -396,6 +550,34 @@ app.post('/api/posts/:postId/vote', async (req, res) => {
     return res.json({ score: newScore });
   } catch (err: any) {
     console.error('[DATABASE] Error voting on post:', err.message || err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// INCREMENT POST VIEWS
+app.post('/api/posts/:postId/view', async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    const { data: current, error: fetchErr } = await supabase
+      .from('posts')
+      .select('views')
+      .eq('id', postId)
+      .single();
+
+    if (fetchErr) throw fetchErr;
+
+    const newViews = (current?.views || 0) + 1;
+
+    const { error: updateErr } = await supabase
+      .from('posts')
+      .update({ views: newViews })
+      .eq('id', postId);
+
+    if (updateErr) throw updateErr;
+    return res.json({ views: newViews });
+  } catch (err: any) {
+    console.error('[DATABASE] Error incrementing views:', err.message || err);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -494,6 +676,11 @@ app.get('/api/health', (req, res) => {
 
 // Setup dev server or static static assets
 async function startServer() {
+  // Run Postgres DB automatic migrations checks on boot
+  await runDatabaseMigrations().catch(err => {
+    console.error('[MIGRATION] Migration error on startServer:', err);
+  });
+
   const isProd = process.env.NODE_ENV === 'production' || 
                  (process.argv[1] && (process.argv[1].includes('dist/server.cjs') || process.argv[1].includes('server.cjs')));
 

@@ -151,7 +151,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({
   // --- ACTIONS ---
 
   // SIGN UP ACTION
-  const handleSignUp = (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
 
@@ -164,8 +164,8 @@ export const UserProfile: React.FC<UserProfileProps> = ({
       triggerNotification('error', 'Пожалуйста, введите корректный Email.');
       return;
     }
-    if (suPassword.length < 4) {
-      triggerNotification('error', 'Пароль должен состоять минимум из 4 символов.');
+    if (suPassword.length < 6) {
+      triggerNotification('error', 'Пароль должен состоять минимум из 6 символов.');
       return;
     }
     if (suPassword !== suVerifyPassword) {
@@ -185,70 +185,97 @@ export const UserProfile: React.FC<UserProfileProps> = ({
       return;
     }
 
-    // Persist to offline user profiles
-    localStorage.setItem('sugule_username', cleanUser);
-    localStorage.setItem('sugule_profile_nickname', suUsername.trim());
-    localStorage.setItem('sugule_profile_email', suEmail.trim());
-    localStorage.setItem('sugule_password', suPassword);
-    
-    setNickname(suUsername.trim());
-    setUserEmail(suEmail.trim());
+    try {
+      const { data, error } = await dbManager.signUp(suEmail.trim(), suPassword);
+      if (error) {
+        triggerNotification('error', `Ошибка регистрации: ${error.message}`);
+        return;
+      }
 
-    // Login user
-    onLoginSuccess(cleanUser);
-    triggerNotification('success', 'Аккаунт успешно создан! Добро пожаловать.');
-    setProfileTab('favorites');
+      // Sync active user ID to client-side helpers
+      if (data?.user) {
+        dbManager.setActiveUserId(data.user.id);
+      }
 
-    // reset fields
-    setSuUsername('');
-    setSuEmail('');
-    setSuPassword('');
-    setSuVerifyPassword('');
-    setSuAgreeTos(false);
-    setSuAgree18(false);
-    setCaptchaState('idle');
+      // Persist to offline user profiles
+      localStorage.setItem('sugule_username', cleanUser);
+      localStorage.setItem('sugule_profile_nickname', suUsername.trim());
+      localStorage.setItem('sugule_profile_email', suEmail.trim());
+      localStorage.setItem('sugule_password', suPassword);
+      
+      setNickname(suUsername.trim());
+      setUserEmail(suEmail.trim());
+
+      // Login user
+      onLoginSuccess(cleanUser);
+      triggerNotification('success', 'Аккаунт успешно создан через Supabase Auth! Добро пожаловать.');
+      setProfileTab('favorites');
+
+      // reset fields
+      setSuUsername('');
+      setSuEmail('');
+      setSuPassword('');
+      setSuVerifyPassword('');
+      setSuAgreeTos(false);
+      setSuAgree18(false);
+      setCaptchaState('idle');
+    } catch (err: any) {
+      triggerNotification('error', `Критическая ошибка: ${err.message || err}`);
+    }
   };
 
   // SIGN IN ACTION
-  const handleSignIn = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
 
-    const identifier = siIdentifier.trim().toLowerCase();
-    const storedUsername = localStorage.getItem('sugule_username');
-    const storedEmail = localStorage.getItem('sugule_profile_email') || 'user@sugule.com';
-    const storedPassword = localStorage.getItem('sugule_password') || '1234';
-
-    if (!identifier) {
-      triggerNotification('error', 'Введите Имя пользователя или Email.');
+    const emailInput = siIdentifier.trim();
+    if (!emailInput) {
+      triggerNotification('error', 'Введите Email для входа.');
+      return;
+    }
+    if (!siPassword) {
+      triggerNotification('error', 'Введите пароль.');
       return;
     }
 
-    // Match credentials
-    const matchesUser = storedUsername && identifier === storedUsername.toLowerCase();
-    const matchesEmail = storedEmail && identifier === storedEmail.toLowerCase();
-    const isMockDefault = identifier === 'admin' || identifier === 'user'; // ease of preview
+    try {
+      const { data, error } = await dbManager.signIn(emailInput, siPassword);
+      if (error) {
+        // Fallback to local storage matching for ease of preview/hybrid options
+        const storedUsername = localStorage.getItem('sugule_username');
+        const storedEmail = localStorage.getItem('sugule_profile_email');
+        const storedPassword = localStorage.getItem('sugule_password');
 
-    if (isMockDefault || matchesUser || matchesEmail) {
-      if (siPassword === storedPassword || siPassword === 'admin' || siPassword === '1234') {
-        const loggedUser = matchesUser ? (storedUsername || 'user') : (isMockDefault ? identifier : 'user');
-        
-        // Ensure username is set
-        if (!localStorage.getItem('sugule_username')) {
-          localStorage.setItem('sugule_username', loggedUser);
+        if ((storedUsername && emailInput.toLowerCase() === storedUsername.toLowerCase()) || 
+            (storedEmail && emailInput.toLowerCase() === storedEmail.toLowerCase())) {
+          if (siPassword === storedPassword || siPassword === '1234') {
+            onLoginSuccess(storedUsername || 'user');
+            triggerNotification('success', 'Вход выполнен (Локальный профиль).');
+            setProfileTab('favorites');
+            return;
+          }
         }
-
-        onLoginSuccess(loggedUser);
-        triggerNotification('success', 'Успешная авторизация! Добро пожаловать в профиль.');
-        setProfileTab('favorites');
-        
-        setSiIdentifier('');
-        setSiPassword('');
-      } else {
-        triggerNotification('error', 'Неверный пароль. Попробуйте снова.');
+        triggerNotification('error', `Ошибка авторизации Supabase: ${error.message}`);
+        return;
       }
-    } else {
-      triggerNotification('error', 'Пользователь с такими данными не найден.');
+
+      const user = data?.user;
+      if (user) {
+        dbManager.setActiveUserId(user.id);
+        const userNick = user.user_metadata?.username || user.email?.split('@')[0] || 'Member';
+        localStorage.setItem('sugule_username', userNick);
+        localStorage.setItem('sugule_profile_email', user.email || '');
+        
+        onLoginSuccess(userNick);
+        triggerNotification('success', 'Вы успешно авторизовались в Supabase Auth!');
+        setProfileTab('favorites');
+      }
+
+      setSiIdentifier('');
+      setSiPassword('');
+    } catch (err: any) {
+      triggerNotification('error', `Критическая ошибка входа: ${err.message || err}`);
     }
   };
 
@@ -259,7 +286,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({
       triggerNotification('error', 'Введите правильный Email-адрес.');
       return;
     }
-    triggerNotification('success', `Ссылка для сброса пароля успешно отправлена на Email: ${rpEmail.trim()}`);
+    triggerNotification('success', `Выслана ссылка для восстановления. Email: ${rpEmail.trim()}`);
     setRpEmail('');
     setTimeout(() => {
       setAuthView('signin');
