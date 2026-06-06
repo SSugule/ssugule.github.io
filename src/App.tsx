@@ -2682,10 +2682,10 @@ export default function App() {
                     <div 
                       onTouchStart={handleTouchStart}
                       onTouchEnd={handleTouchEnd}
-                      className={`bg-black/95 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[220px] sm:min-h-[300px] transition-all duration-300 select-none shadow-2xl shadow-black/80 w-full ${
+                      className={`bg-black/95 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[260px] sm:min-h-[360px] transition-all duration-300 select-none shadow-2xl shadow-black/80 w-full ${
                         isZoomed 
                           ? 'max-h-none overflow-y-auto max-w-5xl' 
-                          : 'max-h-[65vh] md:max-h-[75vh] overflow-hidden max-w-4xl'
+                          : 'max-h-[65vh] md:max-h-[70vh] overflow-hidden max-w-4xl'
                       }`}
                     >
                         {/* Interactive nav chevrons on sides */}
@@ -2696,7 +2696,7 @@ export default function App() {
                           <ChevronLeft className="w-5 h-5" />
                         </button>
  
-                        <div className="w-full flex-grow flex items-center justify-center relative min-h-[180px] sm:min-h-[260px]">
+                        <div className="w-full flex-grow flex items-center justify-center relative min-h-[220px] sm:min-h-[320px]">
                           {/* Left / Right active overlay flip zones (DISABLED FOR VIDEOS OR WHEN ZOOMED) */}
                           {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && !isZoomed && (
                             <>
@@ -2721,7 +2721,7 @@ export default function App() {
                               autoPlay 
                               loop 
                               playsInline 
-                              className="max-h-[48vh] md:max-h-[55vh] w-auto max-w-full rounded-xl object-contain relative z-10 shadow-lg"
+                              className="max-h-[55vh] md:max-h-[60vh] w-auto max-w-full rounded-xl object-contain relative z-10 shadow-lg"
                             />
                           ) : isUrlDownloadable(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) ? (
                             <div className="flex flex-col items-center justify-center p-6 bg-[#0b0f19] border border-zinc-800 rounded-2xl space-y-4 max-w-md w-full relative z-30 text-center select-text shadow-xl">
@@ -2758,7 +2758,7 @@ export default function App() {
                               className={`${
                                 isZoomed 
                                   ? 'w-full h-auto max-w-none max-h-none cursor-zoom-out' 
-                                  : 'max-h-[50vh] md:max-h-[58vh] w-auto max-w-full cursor-zoom-in'
+                                  : 'max-h-[55vh] md:max-h-[60vh] w-auto max-w-full cursor-zoom-in'
                               } rounded-xl object-contain relative z-10 shadow-lg h-auto transition-all duration-300`}
                             />
                           )}
@@ -3630,6 +3630,88 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+
+                {/* Live Media Preview Widget */}
+                {uploadUrl && (
+                  <div className="space-y-3.5 border-t border-zinc-900 pt-5 animate-fadeIn">
+                    <h3 className="text-xs font-bold tracking-wider text-zinc-400 uppercase font-mono flex items-center gap-1.5 select-none">
+                      <span>👁️</span> <span>ПРЕДПРОСМОТР МЕДИА / MEDIA PREVIEW</span>
+                    </h3>
+                    <div className="bg-[#050608] border border-zinc-850 rounded-xl p-3 flex flex-col items-center justify-center min-h-[180px] relative overflow-hidden select-none shadow-inner">
+                      {(() => {
+                        let parsedUrls: string[] = [];
+                        try {
+                          if (uploadUrl.startsWith('[')) {
+                            parsedUrls = JSON.parse(uploadUrl);
+                          } else {
+                            parsedUrls = [uploadUrl];
+                          }
+                        } catch (e) {
+                          parsedUrls = [uploadUrl];
+                        }
+
+                        if (parsedUrls.length === 0) {
+                          return <span className="text-zinc-500 text-xs font-mono">Нет данных для предпросмотра</span>;
+                        }
+
+                        // Determine media types based on tags/formats
+                        const isVideo = parsedUrls[0].match(/\.(mp4|webm|ogg|mov)(\?|$)/i) || uploadType === 'video';
+                        const isAudio = parsedUrls[0].match(/\.(mp3|wav|ogg|aac|m4a)(\?|$)/i) || uploadType === 'audio';
+                        const isDownload = parsedUrls[0].match(/\.(exe|msi|zip|rar|7z|tar|gz|apk|dmg|pkg|bin)(\?|$)/i) || uploadType === 'installer';
+
+                        if (isVideo) {
+                          return (
+                            <video 
+                              src={parsedUrls[0]} 
+                              controls 
+                              className="max-h-52 rounded-xl w-auto max-w-full bg-black/95 my-1"
+                            />
+                          );
+                        } else if (isAudio) {
+                          return (
+                            <div className="w-full flex flex-col items-center gap-3 p-4 bg-zinc-950/40 border border-zinc-900 rounded-xl">
+                              <Music className="w-8 h-8 text-violet-400 animate-pulse" />
+                              <audio src={parsedUrls[0]} controls className="w-full shrink-0" />
+                              <span className="text-[10px] text-zinc-500 font-mono text-center">Аудиоплеер предпросмотра</span>
+                            </div>
+                          );
+                        } else if (isDownload) {
+                          return (
+                            <div className="flex flex-col items-center justify-center gap-3 text-center p-4 bg-[#090a10] border border-zinc-900 rounded-xl w-full">
+                              <div className="w-12 h-12 rounded-full bg-violet-600/10 flex items-center justify-center border border-violet-500/20 text-violet-400">
+                                <FolderDown className="w-6 h-6" />
+                              </div>
+                              <div className="space-y-1 overflow-hidden w-full px-2">
+                                <p className="text-xs font-mono text-zinc-200 truncate font-semibold">
+                                  {parsedUrls[0].split('/').pop()}
+                                </p>
+                                <p className="text-[10px] text-zinc-500 uppercase font-mono tracking-wider font-bold">Исполняемый файл / Установщик</p>
+                              </div>
+                            </div>
+                          );
+                        } else {
+                          // Regular image, GIF or Comic Page Slider
+                          return (
+                            <div className="space-y-2.5 w-full flex flex-col items-center justify-center">
+                              <img 
+                                src={parsedUrls[0]} 
+                                alt="Upload Preview" 
+                                className="max-h-56 rounded-xl w-auto max-w-full object-contain filter drop-shadow-md select-none"
+                                referrerPolicy="no-referrer"
+                              />
+                              {parsedUrls.length > 1 && (
+                                <div className="text-[10px] font-mono text-zinc-400 bg-zinc-950 border border-zinc-850 px-3 py-1 rounded-full flex items-center gap-2">
+                                  <span>📖</span>
+                                  <span>Страниц комикса: <strong>{parsedUrls.length}</strong></span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+                      })()}
+                    </div>
+                  </div>
+                )}
 
                 {uploadErrorMsg && (
                   <div className="p-3 bg-red-950/20 border border-red-900/40 text-red-300 rounded-xl text-xs font-mono">
