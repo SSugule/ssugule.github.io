@@ -433,8 +433,8 @@ export default function App() {
         if (!items) return [];
         return items.map(p => ({
           ...p,
-          title: '',
-          description: ''
+          title: p.title || '',
+          description: p.description || ''
         }));
       };
 
@@ -452,7 +452,7 @@ export default function App() {
       console.error('Error fetching data from Supabase:', e);
       if (!silent) {
         const sanitizePosts = (items: Post[]): Post[] => {
-          return items.map(p => ({ ...p, title: '', description: '' }));
+          return items.map(p => ({ ...p, title: p.title || '', description: p.description || '' }));
         };
         setPosts(sanitizePosts(INITIAL_POSTS));
         setTags(INITIAL_TAGS);
@@ -1971,7 +1971,7 @@ export default function App() {
         )}
 
         {/* --- TAB 1: GALLERY ARCHIVE INDEX --- */}
-        {activeTab === 'gallery' && (
+        {(activeTab === 'gallery' || !!selectedPost) && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
             
             {/* Backdrop for Drawer */}
