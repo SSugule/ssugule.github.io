@@ -3169,6 +3169,9 @@ export default function App() {
                               src={getPostDisplayUrl(post)} 
                               alt="Медиа"
                               referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                e.currentTarget.src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800";
+                              }}
                               className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 group-hover:brightness-[1.05]"
                             />
                           )}

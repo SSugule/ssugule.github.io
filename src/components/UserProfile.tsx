@@ -460,9 +460,36 @@ export const UserProfile: React.FC<UserProfileProps> = ({
   const favoritePosts = posts.filter(p => favorites.includes(p.id));
   const likedPostsList = posts.filter(p => likedPosts.includes(p.id));
 
+  const isPostComic = (post: Post | null): boolean => {
+    if (!post || !post.url) return false;
+    const trimmed = post.url.trim();
+    return trimmed.startsWith('[') && trimmed.endsWith(']');
+  };
+
+  const getComicPages = (post: Post | null): string[] => {
+    if (!post) return [];
+    if (!isPostComic(post)) return [post.url];
+    try {
+      return JSON.parse(post.url);
+    } catch {
+      return [post.url];
+    }
+  };
+
+  const isUrlVideo = (url: string) => {
+    if (!url) return false;
+    const cleaned = url.split('?')[0].toLowerCase();
+    return cleaned.endsWith('.mp4') || cleaned.endsWith('.webm') || cleaned.endsWith('.mov') || cleaned.endsWith('#video');
+  };
+
   const getPostDisplayUrl = (post: Post): string => {
+    if (!post) return '';
+    if (isPostComic(post)) {
+      if (post.cover_url) return post.cover_url;
+      const pages = getComicPages(post);
+      return pages[0] || '';
+    }
     if (post.cover_url) return post.cover_url;
-    // Default fallback
     return post.url;
   };
 
@@ -1015,12 +1042,26 @@ export const UserProfile: React.FC<UserProfileProps> = ({
                     onClick={() => onViewPost(post)}
                     className="group bg-[#0c0d12] border border-zinc-850/80 rounded-xl overflow-hidden cursor-pointer shadow hover:border-violet-500 duration-200 flex flex-col relative aspect-[3/4]"
                   >
-                    <img 
-                      src={getPostDisplayUrl(post)} 
-                      alt="Booru thumbnail" 
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
-                    />
+                    {isUrlVideo(post.url) ? (
+                      <video 
+                        src={post.url} 
+                        loop 
+                        muted 
+                        playsInline 
+                        preload="metadata"
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                      />
+                    ) : (
+                      <img 
+                        src={getPostDisplayUrl(post)} 
+                        alt="Booru thumbnail" 
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          e.currentTarget.src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800";
+                        }}
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                      />
+                    )}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 duration-200 p-3 flex flex-col justify-end">
                       <span className="text-[10px] font-bold text-white tracking-wide truncate">Пост #{post.id.replace('p_','')}</span>
                       <span className="text-[9px] font-mono text-zinc-400 capitalize mt-0.5">{post.rating}</span>
@@ -1057,12 +1098,26 @@ export const UserProfile: React.FC<UserProfileProps> = ({
                     onClick={() => onViewPost(post)}
                     className="group bg-[#0c0d12] border border-zinc-850/80 rounded-xl overflow-hidden cursor-pointer shadow hover:border-violet-500 duration-200 flex flex-col relative aspect-[3/4]"
                   >
-                    <img 
-                      src={getPostDisplayUrl(post)} 
-                      alt="Booru liked thumbnail" 
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
-                    />
+                    {isUrlVideo(post.url) ? (
+                      <video 
+                        src={post.url} 
+                        loop 
+                        muted 
+                        playsInline 
+                        preload="metadata"
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                      />
+                    ) : (
+                      <img 
+                        src={getPostDisplayUrl(post)} 
+                        alt="Booru liked thumbnail" 
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          e.currentTarget.src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800";
+                        }}
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                      />
+                    )}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 duration-200 p-3 flex flex-col justify-end">
                       <span className="text-[10px] font-bold text-white tracking-wide truncate">Пост #{post.id.replace('p_','')}</span>
                       <span className="text-[9px] font-mono text-emerald-400 font-bold mt-0.5">Оценка: {post.score || 1}</span>
@@ -1187,13 +1242,28 @@ export const UserProfile: React.FC<UserProfileProps> = ({
                           key={post.id}
                           className="group bg-[#0c0d12] border border-zinc-850/80 rounded-xl overflow-hidden shadow hover:border-violet-500 duration-200 flex flex-col relative aspect-[3/4]"
                         >
-                          <img 
-                            src={getPostDisplayUrl(post)} 
-                            alt="Booru playlist item" 
-                            onClick={() => onViewPost(post)}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 cursor-pointer" 
-                          />
+                          {isUrlVideo(post.url) ? (
+                            <video 
+                              src={post.url} 
+                              loop 
+                              muted 
+                              playsInline 
+                              preload="metadata"
+                              onClick={() => onViewPost(post)}
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 cursor-pointer" 
+                            />
+                          ) : (
+                            <img 
+                              src={getPostDisplayUrl(post)} 
+                              alt="Booru playlist item" 
+                              onClick={() => onViewPost(post)}
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                e.currentTarget.src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800";
+                              }}
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 cursor-pointer" 
+                            />
+                          )}
                           
                           {/* Top removing control bar overlay */}
                           <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 duration-150 z-20">
