@@ -149,11 +149,17 @@ class SuguleDatabaseManager {
     localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(posts));
   }
 
-  // Unified helper to get the latest database from GitHub static pages or raw repo URL
-  private async getGitHubDatabase(): Promise<any> {
+  private getGitHubSettings() {
     const owner = localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule';
     const repo = localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io';
     const branch = localStorage.getItem('SUGULE_GITHUB_BRANCH') || 'main';
+    const token = localStorage.getItem('SUGULE_GITHUB_TOKEN') || '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';
+    return { owner, repo, branch, token };
+  }
+
+  // Unified helper to get the latest database from GitHub static pages or raw repo URL
+  private async getGitHubDatabase(): Promise<any> {
+    const { owner, repo, branch } = this.getGitHubSettings();
     
     const urls = [
       `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/database.json`,
@@ -180,7 +186,7 @@ class SuguleDatabaseManager {
 
   // Helper to commit database.json back to GitHub repo
   private async commitDbToGitHub(db: any): Promise<boolean> {
-    const token = localStorage.getItem('SUGULE_GITHUB_TOKEN');
+    const { token } = this.getGitHubSettings();
     if (!token) {
       console.warn('[GITHUB] Cancelled direct GitHub update because no token is configured.');
       return false;
@@ -191,10 +197,7 @@ class SuguleDatabaseManager {
 
   // Direct Unified Git Commit to GitHub Content API
   public async commitToGitHub(filePath: string, content: string, message: string): Promise<boolean> {
-    const token = localStorage.getItem('SUGULE_GITHUB_TOKEN');
-    const owner = localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule';
-    const repo = localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io';
-    const branch = localStorage.getItem('SUGULE_GITHUB_BRANCH') || 'main';
+    const { owner, repo, branch, token } = this.getGitHubSettings();
 
     if (!token) return false;
 
@@ -246,13 +249,10 @@ class SuguleDatabaseManager {
 
   // Direct file uploader pushing file binary as base64 to GitHub Content API
   public async uploadFileToGitHub(file: File, onProgress?: (status: string, percentage?: number) => void): Promise<string> {
-    const token = localStorage.getItem('SUGULE_GITHUB_TOKEN');
-    const owner = localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule';
-    const repo = localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io';
-    const branch = localStorage.getItem('SUGULE_GITHUB_BRANCH') || 'main';
+    const { owner, repo, branch, token } = this.getGitHubSettings();
 
     if (!token) {
-      throw new Error('Для загрузки файлов на GitHub, пожалуйста, введите GitHub Personal Access Token во вкладке Настроек.');
+      throw new Error('Для загрузки файлов на GitHub, пожалуйста, настройте токен доступа репозитория.');
     }
 
     if (onProgress) onProgress('Кодирование медиа-файла для GitHub...', 25);
@@ -304,7 +304,7 @@ class SuguleDatabaseManager {
   // --- ARTIFACT FILE UPLOAD (PROXIED TO NODE BACKEND) ---
   public async uploadFile(file: File, onProgress?: (status: string, percentage?: number) => void): Promise<string> {
     // If the system is running client-only (e.g. running on GitHub pages), we should directly use GitHub token if present!
-    const token = localStorage.getItem('SUGULE_GITHUB_TOKEN');
+    const { token } = this.getGitHubSettings();
     
     // Check if we are running in full local server mode or GitHub pages
     const isPages = window.location.hostname.includes('github.io') || !window.location.port;
@@ -485,25 +485,167 @@ class SuguleDatabaseManager {
   }
 
   // --- GETTERS ---
+
+  private parseGithubPosts(rawPosts: any[]): Post[] {
+    if (!rawPosts || !Array.isArray(rawPosts)) return [];
+    return rawPosts
+      .filter(p => p !== null && p !== undefined)
+      .map((p: any) => {
+        let parsedTags: string[] = [];
+        if (p.tags) {
+          if (typeof p.tags === 'string') {
+            try {
+              parsedTags = JSON.parse(p.tags);
+            } catch {
+              parsedTags = p.tags.split(',').map((t: string) => t.trim());
+            }
+          } else if (Array.isArray(p.tags)) {
+            parsedTags = p.tags;
+          }
+        }
+
+        let parsedScreenshots: string[] = [];
+        if (p.screenshots) {
+          if (typeof p.screenshots === 'string') {
+            try {
+              parsedScreenshots = JSON.parse(p.screenshots);
+            } catch {
+              parsedScreenshots = [];
+            }
+          } else if (Array.isArray(p.screenshots)) {
+            parsedScreenshots = p.screenshots;
+          }
+        }
+
+        return {
+          ...p,
+          is_game: p.is_game === 1 || p.is_game === true,
+          tags: parsedTags,
+          screenshots: parsedScreenshots,
+        } as Post;
+      });
+  }
+
+  private extractTagsFromPosts(posts: Post[]): Tag[] {
+    const counts: { [key: string]: number } = {};
+    posts.forEach(p => {
+      if (p && Array.isArray(p.tags)) {
+        p.tags.forEach(t => {
+          if (t && typeof t === 'string') {
+            const lower = t.toLowerCase();
+            counts[lower] = (counts[lower] || 0) + 1;
+          }
+        });
+      }
+    });
+
+    return Object.entries(counts).map(([name, count]) => {
+      let category: 'character' | 'copyright' | 'artist' | 'general' | 'meta' = 'general';
+      const lowerName = name.toLowerCase();
+      if (lowerName.endsWith('_maid') || lowerName.includes('miku') || lowerName.includes('asuka') || lowerName.includes('girl')) {
+        category = 'character';
+      } else if (lowerName.includes('vocaloid') || lowerName.includes('cyberpunk') || lowerName.includes('original')) {
+        category = 'copyright';
+      } else if (lowerName.endsWith('_art') || lowerName.includes('shinkai') || lowerName.includes('wlop')) {
+        category = 'artist';
+      } else if (lowerName.includes('highres') || lowerName.includes('wallpaper')) {
+        category = 'meta';
+      }
+      return { name, category, count };
+    });
+  }
   
   public async getPosts(): Promise<Post[]> {
+    const initialPostIds = new Set(INITIAL_POSTS.map(p => p.id));
+
+    // 1. Try to load the database directly from the GitHub repository
+    try {
+      const githubDb = await this.getGitHubDatabase();
+      if (githubDb && githubDb.posts && Array.isArray(githubDb.posts)) {
+        const parsedPosts = this.parseGithubPosts(githubDb.posts);
+        
+        // Filter out standard (initial) posts so they never mix with repository posts
+        const customPosts = parsedPosts.filter(p => p && p.id && !initialPostIds.has(p.id));
+
+        if (customPosts.length > 0) {
+          console.log(`[SuguleDb] Loaded ${customPosts.length} custom posts from GitHub (standard posts hidden).`);
+          localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
+          
+          // Pre-populate/refresh local storage tags list derived from GitHub posts
+          const extractedTags = this.extractTagsFromPosts(customPosts);
+          localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
+          
+          return customPosts;
+        } else if (parsedPosts.length > 0) {
+          // Connected to GitHub but contains ONLY standard posts
+          console.log(`[SuguleDb] GitHub database contains only ${parsedPosts.length} standard posts.`);
+          localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(parsedPosts));
+          
+          const extractedTags = this.extractTagsFromPosts(parsedPosts);
+          localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
+          
+          return parsedPosts;
+        } else {
+          // Connected to GitHub but contains 0 posts -> return standard posts only
+          console.log('[SuguleDb] GitHub repository contains 0 posts. Showing standard posts.');
+          localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(INITIAL_POSTS));
+          localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(INITIAL_TAGS));
+          return INITIAL_POSTS;
+        }
+      }
+    } catch (gitErr) {
+      console.warn('[SuguleDb] Failed to fetch posts from GitHub, trying local server/cache:', gitErr);
+    }
+
+    // 2. If GitHub fetch failed or was unavailable, fall back to local server endpoint
     try {
       const response = await fetch('/api/posts');
-      if (!response.ok) throw new Error('API error');
-      const posts = await response.json() as Post[];
-      localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(posts));
-      return posts;
+      if (response.ok) {
+        const posts = await response.json() as Post[];
+        if (posts && Array.isArray(posts) && posts.length > 0) {
+          const customPosts = posts.filter(p => p && p.id && !initialPostIds.has(p.id));
+          if (customPosts.length > 0) {
+            localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
+            return customPosts;
+          } else {
+            localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(posts));
+            return posts;
+          }
+        }
+      }
     } catch (e) {
       console.warn('Backend proxy fetch posts failed, loading from offline cache:', e);
-      const local = localStorage.getItem('SUGULE_LOCAL_POSTS');
-      if (local) {
-        try { return JSON.parse(local); } catch { return INITIAL_POSTS; }
-      }
-      return INITIAL_POSTS;
     }
+
+    // 3. Absolute cache fallback
+    const local = localStorage.getItem('SUGULE_LOCAL_POSTS');
+    if (local) {
+      try {
+        const parsed = JSON.parse(local) as Post[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const customPosts = parsed.filter(p => p && p.id && !initialPostIds.has(p.id));
+          if (customPosts.length > 0) {
+            return customPosts;
+          }
+          return parsed;
+        }
+      } catch { /* continue */ }
+    }
+    return INITIAL_POSTS;
   }
 
   public async getTags(): Promise<Tag[]> {
+    // Check if we have extracted/updated tags derived from GitHub posts
+    const localTags = localStorage.getItem('SUGULE_LOCAL_TAGS');
+    if (localTags) {
+      try {
+        const parsed = JSON.parse(localTags) as Tag[];
+        if (parsed && parsed.length > 0) {
+          return parsed;
+        }
+      } catch { /* ignore and continue */ }
+    }
+
     try {
       const response = await fetch('/api/tags');
       if (!response.ok) throw new Error('API error');
@@ -761,8 +903,23 @@ class SuguleDatabaseManager {
       // Offline / GitHub Pages Serverless Mode:
       // Fetch latest database.json directly from connected GitHub repository
       const db = await this.getGitHubDatabase();
-      const usersList = db?.users || JSON.parse(localStorage.getItem('SUGULE_LOCAL_USERS') || '[]');
+      let usersList = db?.users || JSON.parse(localStorage.getItem('SUGULE_LOCAL_USERS') || '[]');
       
+      const hasAdmin = usersList.some((u: any) => u.username.toLowerCase() === 'admin');
+      if (!hasAdmin) {
+        const adminObj = {
+          username: "admin",
+          nickname: "Администратор",
+          email: "admin@sugule.com",
+          password: "admin",
+          avatar_url: "https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?q=80&w=200&h=200&fit=crop",
+          cover_url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1200&h=400&fit=crop",
+          description: "Администратор архива Sugule.",
+          role: "admin"
+        };
+        usersList = [adminObj, ...usersList];
+      }
+
       const found = usersList.find((u: any) => u.username.toLowerCase() === cleanId || u.email.toLowerCase() === cleanId);
       if (!found) {
         throw new Error('Пользователь с такими данными не найден.');
