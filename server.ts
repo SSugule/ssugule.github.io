@@ -39,6 +39,20 @@ function loadDb(): LocalDb {
       const data = fs.readFileSync(dbPath, 'utf8');
       const db = JSON.parse(data);
       if (!db.users) db.users = [];
+      const hasAdmin = db.users.some((u: any) => u.username.toLowerCase() === 'admin');
+      if (!hasAdmin) {
+        db.users.push({
+          username: "admin",
+          nickname: "Администратор",
+          email: "admin@sugule.com",
+          password: "admin",
+          avatar_url: "https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?q=80&w=200&h=200&fit=crop",
+          cover_url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1200&h=400&fit=crop",
+          description: "Администратор архива Sugule.",
+          role: "admin"
+        });
+        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
+      }
       return db;
     }
   } catch (err) {
