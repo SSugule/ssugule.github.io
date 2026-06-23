@@ -3,7 +3,6 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { exec } from 'child_process';
-import sqlite3 from 'sqlite3';
 import { INITIAL_POSTS, INITIAL_TAGS, INITIAL_COMMENTS } from './src/sampleData';
 
 dotenv.config();
@@ -13,152 +12,273 @@ app.use(express.json());
 
 const PORT = 3000;
 
-// Setup sqlite3 database connection
-const dbPath = path.resolve(process.cwd(), 'database.sqlite');
-const sqlDb = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('[SQLITE] Database opening error:', err.message);
-  } else {
-    console.log('[SQLITE] Connected successfully to local database: database.sqlite');
+// Setup portable filesystem database.json
+const dbPath = path.resolve(process.cwd(), 'database.json');
+
+interface LocalDb {
+  posts: any[];
+  tags: any[];
+  comments: any[];
+}
+
+function loadDb(): LocalDb {
+  try {
+    if (fs.existsSync(dbPath)) {
+      const data = fs.readFileSync(dbPath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('[JSON-DB] Error reading database.json:', err);
   }
-});
-
-// Wrap sqlite3 operations in promises for beautiful async/await flow
-function runQuery(sql: string, params: any[] = []): Promise<any> {
-  return new Promise((resolve, reject) => {
-    sqlDb.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve(this);
-    });
-  });
+  
+  // Create default fallback schema matching SQLite structure on fly
+  const initialDb: LocalDb = {
+    posts: INITIAL_POSTS.map(p => ({
+      id: p.id,
+      title: p.title || 'Untitled',
+      url: p.url,
+      rating: p.rating,
+      score: p.score || 1,
+      elo: p.elo || 1500,
+      uploader: p.uploader || 'Anonymous',
+      source_url: p.source_url || null,
+      description: p.description || null,
+      tags: JSON.stringify(p.tags || []),
+      cover_url: p.cover_url || null,
+      is_game: p.is_game ? 1 : 0,
+      version: p.version || null,
+      screenshots: JSON.stringify(p.screenshots || []),
+      download_pc: p.download_pc || null,
+      download_mobile: p.download_mobile || null,
+      device_compatibility: p.device_compatibility || null,
+      created_at: p.created_at || new Date().toISOString()
+    })),
+    tags: INITIAL_TAGS.map(t => ({
+      name: t.name.toLowerCase(),
+      category: t.category,
+      count: t.count || 1
+    })),
+    comments: INITIAL_COMMENTS.map(c => ({
+      id: c.id,
+      post_id: c.post_id,
+      author: c.author,
+      text: c.text,
+      created_at: c.created_at,
+      likes: c.likes || 0
+    }))
+  };
+  saveDb(initialDb);
+  return initialDb;
 }
 
-function getQuery(sql: string, params: any[] = []): Promise<any> {
-  return new Promise((resolve, reject) => {
-    sqlDb.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+function saveDb(data: LocalDb) {
+  try {
+    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[JSON-DB] Error saving database.json:', err);
+  }
 }
 
-function allQuery(sql: string, params: any[] = []): Promise<any[]> {
-  return new Promise((resolve, reject) => {
-    sqlDb.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
+// Wrap operations in promise flows to match existing Express endpoint handlers
+async function runQuery(sql: string, params: any[] = []): Promise<any> {
+  const db = loadDb();
+  const normalizedSql = sql.replace(/\s+/g, ' ').trim().toUpperCase();
+
+  // 1. DELETE FROM COMMENTS WHERE POST_ID = ?
+  if (normalizedSql.startsWith('DELETE FROM COMMENTS WHERE POST_ID = ?')) {
+    const [postId] = params;
+    db.comments = db.comments.filter(c => c.post_id !== postId);
+    saveDb(db);
+    return { changes: 1 };
+  }
+
+  // 2. DELETE FROM POSTS WHERE ID = ?
+  if (normalizedSql.startsWith('DELETE FROM POSTS WHERE ID = ?')) {
+    const [postId] = params;
+    db.posts = db.posts.filter(p => p.id !== postId);
+    saveDb(db);
+    return { changes: 1 };
+  }
+
+  // 3. UPDATE POSTS SET TAGS = ? WHERE ID = ?
+  if (normalizedSql.startsWith('UPDATE POSTS SET TAGS = ? WHERE ID = ?')) {
+    const [tagsJson, postId] = params;
+    db.posts = db.posts.map(p => p.id === postId ? { ...p, tags: tagsJson } : p);
+    saveDb(db);
+    return { changes: 1 };
+  }
+
+  // 4. UPDATE POSTS SET SCORE = ? WHERE ID = ?
+  if (normalizedSql.startsWith('UPDATE POSTS SET SCORE = ? WHERE ID = ?')) {
+    const [score, postId] = params;
+    db.posts = db.posts.map(p => p.id === postId ? { ...p, score } : p);
+    saveDb(db);
+    return { changes: 1 };
+  }
+
+  // 5. UPDATE TAGS SET COUNT = COUNT + 1 WHERE LOWER(NAME) = ?
+  if (normalizedSql.startsWith('UPDATE TAGS SET COUNT = COUNT + 1 WHERE LOWER(NAME) = ?')) {
+    const [lowerName] = params;
+    db.tags = db.tags.map(t => t.name.toLowerCase() === lowerName.toLowerCase() ? { ...t, count: (t.count || 0) + 1 } : t);
+    saveDb(db);
+    return { changes: 1 };
+  }
+
+  // 6. UPDATE TAGS SET CATEGORY = ? WHERE LOWER(NAME) = ?
+  if (normalizedSql.startsWith('UPDATE TAGS SET CATEGORY = ? WHERE LOWER(NAME) = ?')) {
+    const [category, lowerName] = params;
+    db.tags = db.tags.map(t => t.name.toLowerCase() === lowerName.toLowerCase() ? { ...t, category } : t);
+    saveDb(db);
+    return { changes: 1 };
+  }
+
+  // 7. INSERT OR IGNORE INTO TAGS (NAME, CATEGORY, COUNT) VALUES (?, ?, ?)
+  if (normalizedSql.startsWith('INSERT OR IGNORE INTO TAGS')) {
+    const [name, category, count] = params;
+    const exists = db.tags.some(t => t.name.toLowerCase() === name.toLowerCase());
+    if (!exists) {
+      db.tags.push({ name: name.toLowerCase(), category, count: count || 1 });
+      saveDb(db);
+    }
+    return { changes: 1 };
+  }
+
+  // 8. INSERT OR REPLACE INTO POSTS / INSERT INTO POSTS
+  if (normalizedSql.startsWith('INSERT OR REPLACE INTO POSTS') || normalizedSql.startsWith('INSERT INTO POSTS')) {
+    const [
+      id, title, url, rating, score, elo, uploader, source_url, description,
+      tags, cover_url, is_game, version, screenshots, download_pc, download_mobile,
+      device_compatibility, created_at
+    ] = params;
+
+    const newPost = {
+      id, title, url, rating, score, elo, uploader, source_url, description,
+      tags, cover_url, is_game, version, screenshots, download_pc, download_mobile,
+      device_compatibility, created_at
+    };
+
+    db.posts = db.posts.filter(p => p.id !== id);
+    db.posts.push(newPost);
+    saveDb(db);
+    return { changes: 1 };
+  }
+
+  // 9. INSERT OR REPLACE INTO COMMENTS
+  if (normalizedSql.startsWith('INSERT OR REPLACE INTO COMMENTS')) {
+    const [id, post_id, author, text, created_at, likes] = params;
+    const newComment = { id, post_id, author, text, created_at, likes };
+
+    db.comments = db.comments.filter(c => c.id !== id);
+    db.comments.push(newComment);
+    saveDb(db);
+    return { changes: 1 };
+  }
+
+  // 10. UPDATE POSTS SET TITLE = COALESCE(?, TITLE), ... WHERE ID = ?
+  if (normalizedSql.includes('UPDATE POSTS SET')) {
+    const postId = params[params.length - 1];
+    db.posts = db.posts.map(p => {
+      if (p.id === postId) {
+        return {
+          ...p,
+          title: params[0] !== null ? params[0] : p.title,
+          url: params[1] !== null ? params[1] : p.url,
+          rating: params[2] !== null ? params[2] : p.rating,
+          source_url: params[3] !== undefined ? params[3] : p.source_url,
+          description: params[4] !== undefined ? params[4] : p.description,
+          tags: params[5] !== null ? params[5] : p.tags,
+          cover_url: params[6] !== undefined ? params[6] : p.cover_url
+        };
+      }
+      return p;
     });
-  });
+    saveDb(db);
+    return { changes: 1 };
+  }
+
+  // 11. CREATE TABLE
+  if (normalizedSql.startsWith('CREATE TABLE')) {
+    return { changes: 0 };
+  }
+
+  console.warn('[JSON-DB] Unhandled runQuery SQL:', sql, 'Params:', params);
+  return { changes: 0 };
+}
+
+async function getQuery(sql: string, params: any[] = []): Promise<any> {
+  const db = loadDb();
+  const normalizedSql = sql.replace(/\s+/g, ' ').trim().toUpperCase();
+
+  // 1. SELECT COUNT(*) AS COUNT FROM POSTS
+  if (normalizedSql.startsWith('SELECT COUNT(*) AS COUNT FROM POSTS')) {
+    return { count: db.posts.length };
+  }
+
+  // 2. SELECT NAME FROM TAGS WHERE LOWER(NAME) = ?
+  if (normalizedSql.startsWith('SELECT NAME FROM TAGS WHERE LOWER(NAME) = ?')) {
+    const [lowerName] = params;
+    const found = db.tags.find(t => t.name.toLowerCase() === lowerName.toLowerCase());
+    return found ? { name: found.name } : null;
+  }
+
+  // 3. SELECT * FROM TAGS WHERE LOWER(NAME) = ?
+  if (normalizedSql.startsWith('SELECT * FROM TAGS WHERE LOWER(NAME) = ?')) {
+    const [lowerName] = params;
+    const found = db.tags.find(t => t.name.toLowerCase() === lowerName.toLowerCase());
+    return found || null;
+  }
+
+  // 4. SELECT SCORE FROM POSTS WHERE ID = ?
+  if (normalizedSql.startsWith('SELECT SCORE FROM POSTS WHERE ID = ?')) {
+    const [postId] = params;
+    const found = db.posts.find(p => p.id === postId);
+    return found ? { score: found.score } : null;
+  }
+
+  // 5. SELECT * FROM POSTS WHERE ID = ?
+  if (normalizedSql.startsWith('SELECT * FROM POSTS WHERE ID = ?')) {
+    const [postId] = params;
+    const found = db.posts.find(p => p.id === postId);
+    return found || null;
+  }
+
+  console.warn('[JSON-DB] Unhandled getQuery SQL:', sql, 'Params:', params);
+  return null;
+}
+
+async function allQuery(sql: string, params: any[] = []): Promise<any[]> {
+  const db = loadDb();
+  const normalizedSql = sql.replace(/\s+/g, ' ').trim().toUpperCase();
+
+  // 1. SELECT * FROM POSTS
+  if (normalizedSql.startsWith('SELECT * FROM POSTS')) {
+    return db.posts;
+  }
+
+  // 2. SELECT * FROM TAGS
+  if (normalizedSql.startsWith('SELECT * FROM TAGS')) {
+    return db.tags;
+  }
+
+  // 3. SELECT * FROM COMMENTS WHERE POST_ID = ?
+  if (normalizedSql.startsWith('SELECT * FROM COMMENTS WHERE POST_ID = ?')) {
+    const [postId] = params;
+    return db.comments.filter(c => c.post_id === postId);
+  }
+
+  console.warn('[JSON-DB] Unhandled allQuery SQL:', sql, 'Params:', params);
+  return [];
 }
 
 // Database initial bootstrapping
 async function initDatabase() {
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS posts (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      url TEXT NOT NULL,
-      rating TEXT NOT NULL,
-      score INTEGER NOT NULL DEFAULT 1,
-      elo INTEGER NOT NULL DEFAULT 1500,
-      uploader TEXT NOT NULL,
-      source_url TEXT,
-      description TEXT,
-      tags TEXT,
-      cover_url TEXT,
-      is_game INTEGER DEFAULT 0,
-      version TEXT,
-      screenshots TEXT,
-      download_pc TEXT,
-      download_mobile TEXT,
-      device_compatibility TEXT,
-      created_at TEXT NOT NULL
-    )
-  `);
-
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS tags (
-      name TEXT PRIMARY KEY,
-      category TEXT NOT NULL,
-      count INTEGER NOT NULL DEFAULT 1
-    )
-  `);
-
-  await runQuery(`
-    CREATE TABLE IF NOT EXISTS comments (
-      id TEXT PRIMARY KEY,
-      post_id TEXT NOT NULL,
-      author TEXT NOT NULL,
-      text TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      likes INTEGER NOT NULL DEFAULT 0
-    )
-  `);
-
-  // Auto-seed empty database
-  try {
-    const postCountRow = await getQuery('SELECT COUNT(*) as count FROM posts');
-    if (postCountRow.count === 0) {
-      console.log('[SQLITE] Fresh database detected. Seeding fallback INITIAL_POSTS, INITIAL_TAGS, and tags...');
-      
-      // Post tags seeding
-      for (const t of INITIAL_TAGS) {
-        await runQuery(
-          'INSERT OR IGNORE INTO tags (name, category, count) VALUES (?, ?, ?)',
-          [t.name.toLowerCase(), t.category, t.count || 1]
-        );
-      }
-
-      // Posts seeding
-      for (const p of INITIAL_POSTS) {
-        await runQuery(
-          `INSERT OR REPLACE INTO posts (
-            id, title, url, rating, score, elo, uploader, source_url, description, 
-            tags, cover_url, is_game, version, screenshots, download_pc, download_mobile, 
-            device_compatibility, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            p.id,
-            p.title || 'Untitled',
-            p.url,
-            p.rating,
-            p.score || 1,
-            p.elo || 1500,
-            p.uploader || 'Anonymous',
-            p.source_url || null,
-            p.description || null,
-            JSON.stringify(p.tags || []),
-            p.cover_url || null,
-            p.is_game ? 1 : 0,
-            p.version || null,
-            JSON.stringify(p.screenshots || []),
-            p.download_pc || null,
-            p.download_mobile || null,
-            p.device_compatibility || null,
-            p.created_at || new Date().toISOString()
-          ]
-        );
-      }
-
-      // Seed comments
-      for (const c of INITIAL_COMMENTS) {
-        await runQuery(
-          `INSERT OR REPLACE INTO comments (id, post_id, author, text, created_at, likes)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [c.id, c.post_id, c.author, c.text, c.created_at, c.likes || 0]
-        );
-      }
-
-      console.log('[SQLITE] Database seeding completed successfully.');
-    }
-  } catch (err: any) {
-    console.error('[SQLITE] Seeding check failed:', err.message);
-  }
+  loadDb();
+  console.log('[JSON-DB] File-based database boot completed successfully.');
 }
 
 // Call db initializer
 initDatabase().catch(err => {
-  console.error('[SQLITE] Database initialization failed:', err);
+  console.error('[JSON-DB] Database initialization failed:', err);
 });
 
 // Automatically ensure correct categories for added tags
@@ -730,7 +850,7 @@ app.get('/api/health', async (req, res) => {
     const row = await getQuery('SELECT COUNT(*) as count FROM posts');
     res.json({
       status: 'ok',
-      database_host: `SQLite file-backed database connected successfully. Current posts count: ${row.count}`
+      database_host: `JSON file-backed database connected successfully. Current posts count: ${row.count}`
     });
   } catch (err: any) {
     res.json({
