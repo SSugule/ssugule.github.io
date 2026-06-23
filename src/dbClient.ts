@@ -149,169 +149,339 @@ class SuguleDatabaseManager {
     localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(posts));
   }
 
-  // --- ARTIFACT FILE UPLOAD (PROXIED TO NODE BACKEND) ---
-  public async uploadFile(file: File, onProgress?: (status: string, percentage?: number) => void): Promise<string> {
-    const fileExt = file.name.split('.').pop() || 'png';
-    const isVideo = file.type.startsWith('video/') || ['mp4', 'webm', 'avi', 'mkv', 'mov'].includes(fileExt.toLowerCase());
+  // Unified helper to get the latest database from GitHub static pages or raw repo URL
+  private async getGitHubDatabase(): Promise<any> {
+    const owner = localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule';
+    const repo = localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io';
+    const branch = localStorage.getItem('SUGULE_GITHUB_BRANCH') || 'main';
+    
+    const urls = [
+      `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/database.json`,
+      `/${repo}/database.json`,
+      `/database.json`
+    ];
 
-    const CHUNK_SIZE = 40 * 1024 * 1024; // 40MB chunks (as requested, replacing the 8MB limit)
-
-    if (file.size > CHUNK_SIZE) {
-      console.log(`[CHUNKS] Instantiating high-capacity chunked uploader for ${file.name} (Size: ${(file.size / 1024 / 1024).toFixed(2)} MB)`);
-      if (onProgress) onProgress(`Подготовка к загрузке (${(file.size / 1024 / 1024).toFixed(1)} MB)...`, 0);
-
-      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-      const chunkId = 'chunk_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
-
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * CHUNK_SIZE;
-        const end = Math.min(file.size, start + CHUNK_SIZE);
-        const chunkBlob = file.slice(start, end);
-
-        if (onProgress) {
-          const currentPercent = Math.round((i / totalChunks) * 100);
-          onProgress(`Загрузка: часть ${i + 1} из ${totalChunks}`, currentPercent);
+    for (const url of urls) {
+      try {
+        const response = await fetch(url);
+        if (response.ok) {
+          const db = await response.json();
+          if (db && db.posts) {
+            console.log('[SuguleDb] Loaded database successfully from:', url);
+            return db;
+          }
         }
-
-        const response = await fetch('/api/upload-chunk', {
-          method: 'POST',
-          headers: {
-            'x-chunk-id': chunkId,
-            'x-chunk-index': String(i),
-            'x-chunk-total': String(totalChunks),
-            'x-file-name': encodeURIComponent(file.name),
-            'Content-Type': 'application/octet-stream'
-          },
-          body: chunkBlob
-        });
-
-        if (!response.ok) {
-          const errMsg = await response.text();
-          throw new Error(`Ошибка загрузки части ${i + 1}: ${errMsg}`);
-        }
+      } catch (err) {
+        // Continue
       }
+    }
+    return null;
+  }
 
-      if (onProgress) {
-        onProgress(isVideo && file.size > 50 * 1024 * 1024 
-          ? 'Обработка и автоматическое сжатие видео через FFmpeg (может занять некоторое время)...' 
-          : 'Слияние частей файла на сервере...', 95);
-      }
+  // Helper to commit database.json back to GitHub repo
+  private async commitDbToGitHub(db: any): Promise<boolean> {
+    const token = localStorage.getItem('SUGULE_GITHUB_TOKEN');
+    if (!token) {
+      console.warn('[GITHUB] Cancelled direct GitHub update because no token is configured.');
+      return false;
+    }
+    const content = JSON.stringify(db, null, 2);
+    return await this.commitToGitHub('database.json', content, 'Update database via Sugule Client portal');
+  }
 
-      const completeResponse = await fetch('/api/upload-complete', {
-        method: 'POST',
+  // Direct Unified Git Commit to GitHub Content API
+  public async commitToGitHub(filePath: string, content: string, message: string): Promise<boolean> {
+    const token = localStorage.getItem('SUGULE_GITHUB_TOKEN');
+    const owner = localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule';
+    const repo = localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io';
+    const branch = localStorage.getItem('SUGULE_GITHUB_BRANCH') || 'main';
+
+    if (!token) return false;
+
+    try {
+      let sha = '';
+      const getUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+      const resGet = await fetch(getUrl, {
         headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          chunkId,
-          chunkTotal: totalChunks,
-          fileName: file.name,
-          fileType: file.type
-        })
+          'Authorization': `token ${token}`,
+          'Accept': 'application/vnd.github.v3+json'
+        }
       });
 
-      if (!completeResponse.ok) {
-        let errMsg = `Ошибка сервера: статус ${completeResponse.status}`;
-        try {
-          const errorJson = await completeResponse.json();
-          if (errorJson && errorJson.message) {
-            errMsg = errorJson.message;
-          } else if (errorJson && errorJson.error) {
-            errMsg = errorJson.error;
-          }
-        } catch (e) {
-          try {
-            const htmlText = await completeResponse.text();
-            if (htmlText.includes('Too heavy') || htmlText.includes('TooHeavy') || htmlText.includes('слишком тяжелое') || htmlText.includes('слишком тяжелый')) {
-              errMsg = "Файл слишком тяжелый. Превышен лимит размера файла (100 МБ).";
-            } else {
-              const matched = htmlText.match(/<pre>([\s\S]*?)<\/pre>/) || htmlText.match(/<h1>([\s\S]*?)<\/h1>/);
-              if (matched && matched[1]) {
-                errMsg = `Ошибка сервера: ${matched[1].trim()}`;
-              }
-            }
-          } catch (textErr) {}
-        }
-        throw new Error(errMsg);
+      if (resGet.ok) {
+        const fileData = await resGet.json();
+        sha = fileData.sha;
       }
 
-      let resJson: any;
-      try {
-        resJson = await completeResponse.json();
-      } catch (parseErr) {
-        throw new Error('Некорректный ответ от сервера слияния чанков.');
-      }
+      const putUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+      
+      // Safe Base64 encoding supporting Unicode strings
+      const base64Content = btoa(encodeURIComponent(content).replace(/%([0-9A-F]{2})/g, (match, p1) => {
+        return String.fromCharCode(parseInt(p1, 16));
+      }));
 
-      if (resJson && resJson.error === 'TooHeavy') {
-        throw new Error(resJson.message);
-      }
-      if (resJson && resJson.url) {
-        if (onProgress) {
-          onProgress(isVideo && file.size > 50 * 1024 * 1024 
-            ? 'Видео успешно обработано!' 
-            : 'Файл успешно загружен!', 100);
-        }
-        return resJson.url;
-      }
-      throw new Error('No public URL returned from upload server.');
+      const body: any = {
+        message: message,
+        content: base64Content,
+        branch: branch
+      };
+      if (sha) body.sha = sha;
+
+      const resPut = await fetch(putUrl, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `token ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/vnd.github.v3+json'
+        },
+        body: JSON.stringify(body)
+      });
+
+      return resPut.ok;
+    } catch (e) {
+      console.error('[GIT-COMMIT] Direct GitHub commit error:', e);
+      return false;
+    }
+  }
+
+  // Direct file uploader pushing file binary as base64 to GitHub Content API
+  public async uploadFileToGitHub(file: File, onProgress?: (status: string, percentage?: number) => void): Promise<string> {
+    const token = localStorage.getItem('SUGULE_GITHUB_TOKEN');
+    const owner = localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule';
+    const repo = localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io';
+    const branch = localStorage.getItem('SUGULE_GITHUB_BRANCH') || 'main';
+
+    if (!token) {
+      throw new Error('Для загрузки файлов на GitHub, пожалуйста, введите GitHub Personal Access Token во вкладке Настроек.');
     }
 
-    // --- SINGLE-SHOT UPLOAD WITH XHR TO GET DETAILED PROGRESS ---
-    return new Promise<string>((resolve, reject) => {
-      const randomId = Math.random().toString(36).substring(2, 11);
-      const fileName = `${Date.now()}_${randomId}.${fileExt}`;
-      
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload', true);
-      xhr.setRequestHeader('x-file-name', encodeURIComponent(fileName));
-      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    if (onProgress) onProgress('Кодирование медиа-файла для GitHub...', 25);
 
-      if (xhr.upload && onProgress) {
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            const percent = Math.round((event.loaded / event.total) * 100);
-            onProgress('Загрузка файла...', percent);
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64Data = result.split(',')[1];
+        resolve(base64Data);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
+    if (onProgress) onProgress('Загрузка в отдельную папку репозитория...', 60);
+
+    const fileExt = file.name.split('.').pop() || 'png';
+    const randomId = Math.random().toString(36).substring(2, 11);
+    const finalName = `${Date.now()}_${randomId}.${fileExt}`;
+    const filePath = `media/${finalName}`;
+
+    const putUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+    const body = {
+      message: `Media upload: ${file.name}`,
+      content: base64,
+      branch: branch
+    };
+
+    const resPut = await fetch(putUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `token ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github.v3+json'
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!resPut.ok) {
+      const errorText = await resPut.text();
+      throw new Error(`GitHub Upload API Error: ${errorText}`);
+    }
+
+    if (onProgress) onProgress('Файл успешно сохранен в медиа-папку репозитория!', 100);
+    return `/media/${finalName}`;
+  }
+
+  // --- ARTIFACT FILE UPLOAD (PROXIED TO NODE BACKEND) ---
+  public async uploadFile(file: File, onProgress?: (status: string, percentage?: number) => void): Promise<string> {
+    // If the system is running client-only (e.g. running on GitHub pages), we should directly use GitHub token if present!
+    const token = localStorage.getItem('SUGULE_GITHUB_TOKEN');
+    
+    // Check if we are running in full local server mode or GitHub pages
+    const isPages = window.location.hostname.includes('github.io') || !window.location.port;
+    if (isPages && token) {
+      return this.uploadFileToGitHub(file, onProgress);
+    }
+
+    try {
+      const fileExt = file.name.split('.').pop() || 'png';
+      const isVideo = file.type.startsWith('video/') || ['mp4', 'webm', 'avi', 'mkv', 'mov'].includes(fileExt.toLowerCase());
+
+      const CHUNK_SIZE = 40 * 1024 * 1024; // 40MB chunks (as requested, replacing the 8MB limit)
+
+      if (file.size > CHUNK_SIZE) {
+        console.log(`[CHUNKS] Instantiating high-capacity chunked uploader for ${file.name} (Size: ${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+        if (onProgress) onProgress(`Подготовка к загрузке (${(file.size / 1024 / 1024).toFixed(1)} MB)...`, 0);
+
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        const chunkId = 'chunk_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(file.size, start + CHUNK_SIZE);
+          const chunkBlob = file.slice(start, end);
+
+          if (onProgress) {
+            const currentPercent = Math.round((i / totalChunks) * 100);
+            onProgress(`Загрузка: часть ${i + 1} из ${totalChunks}`, currentPercent);
           }
-        };
-      }
 
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
+          const response = await fetch('/api/upload-chunk', {
+            method: 'POST',
+            headers: {
+              'x-chunk-id': chunkId,
+              'x-chunk-index': String(i),
+              'x-chunk-total': String(totalChunks),
+              'x-file-name': encodeURIComponent(file.name),
+              'Content-Type': 'application/octet-stream'
+            },
+            body: chunkBlob
+          });
+
+          if (!response.ok) {
+            const errMsg = await response.text();
+            throw new Error(`Ошибка загрузки части ${i + 1}: ${errMsg}`);
+          }
+        }
+
+        if (onProgress) {
+          onProgress(isVideo && file.size > 50 * 1024 * 1024 
+            ? 'Обработка и автоматическое сжатие видео через FFmpeg (может занять некоторое время)...' 
+            : 'Слияние частей файла на сервере...', 95);
+        }
+
+        const completeResponse = await fetch('/api/upload-complete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            chunkId,
+            chunkTotal: totalChunks,
+            fileName: file.name,
+            fileType: file.type
+          })
+        });
+
+        if (!completeResponse.ok) {
+          let errMsg = `Ошибка сервера: статус ${completeResponse.status}`;
           try {
-            const resJson = JSON.parse(xhr.responseText);
-            if (resJson && resJson.url) {
-              if (onProgress) onProgress('Файл успешно загружен!', 100);
-              resolve(resJson.url);
-            } else {
-              reject(new Error('No public URL returned from upload server.'));
+            const errorJson = await completeResponse.json();
+            if (errorJson && errorJson.message) {
+              errMsg = errorJson.message;
+            } else if (errorJson && errorJson.error) {
+              errMsg = errorJson.error;
             }
           } catch (e) {
-            reject(new Error('Invalid response from server.'));
+            try {
+              const htmlText = await completeResponse.text();
+              if (htmlText.includes('Too heavy') || htmlText.includes('TooHeavy') || htmlText.includes('слишком тяжелое') || htmlText.includes('слишком тяжелый')) {
+                errMsg = "Файл слишком тяжелый. Превышен лимит размера файла (100 МБ).";
+              } else {
+                const matched = htmlText.match(/<pre>([\s\S]*?)<\/pre>/) || htmlText.match(/<h1>([\s\S]*?)<\/h1>/);
+                if (matched && matched[1]) {
+                  errMsg = `Ошибка сервера: ${matched[1].trim()}`;
+                }
+              }
+            } catch (textErr) {}
           }
-        } else {
-          let errMsg = xhr.responseText;
-          try {
-            const parsed = JSON.parse(xhr.responseText);
-            if (parsed.error === 'TooHeavy' && parsed.message) {
-              errMsg = parsed.message;
-            }
-          } catch { /* ignore */ }
-          reject(new Error(errMsg || `Ошибка сервера: статус ${xhr.status}`));
+          throw new Error(errMsg);
         }
-      };
 
-      xhr.onerror = () => {
-        reject(new Error('Network error during upload.'));
-      };
+        let resJson: any;
+        try {
+          resJson = await completeResponse.json();
+        } catch (parseErr) {
+          throw new Error('Некорректный ответ от сервера слияния чанков.');
+        }
 
-      try {
-        if (onProgress) onProgress('Загрузка файла...', 0);
-        xhr.send(file);
-      } catch (localErr: any) {
-        console.error('Fatal proxy upload failure:', localErr);
-        reject(new Error(localErr.message || 'не удалось записать файл'));
+        if (resJson && resJson.error === 'TooHeavy') {
+          throw new Error(resJson.message);
+        }
+        if (resJson && resJson.url) {
+          if (onProgress) {
+            onProgress(isVideo && file.size > 50 * 1024 * 1024 
+              ? 'Видео успешно обработано!' 
+              : 'Файл успешно загружен!', 100);
+          }
+          return resJson.url;
+        }
+        throw new Error('No public URL returned from upload server.');
       }
-    });
+
+      // --- SINGLE-SHOT UPLOAD WITH XHR TO GET DETAILED PROGRESS ---
+      return new Promise<string>((resolve, reject) => {
+        const randomId = Math.random().toString(36).substring(2, 11);
+        const fileName = `${Date.now()}_${randomId}.${fileExt}`;
+        
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/upload', true);
+        xhr.setRequestHeader('x-file-name', encodeURIComponent(fileName));
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+        if (xhr.upload && onProgress) {
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              const percent = Math.round((event.loaded / event.total) * 100);
+              onProgress('Загрузка файла...', percent);
+            }
+          };
+        }
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              const resJson = JSON.parse(xhr.responseText);
+              if (resJson && resJson.url) {
+                if (onProgress) onProgress('Файл успешно загружен!', 100);
+                resolve(resJson.url);
+              } else {
+                reject(new Error('No public URL returned from upload server.'));
+              }
+            } catch (e) {
+              reject(new Error('Invalid response from server.'));
+            }
+          } else {
+            let errMsg = xhr.responseText;
+            try {
+              const parsed = JSON.parse(xhr.responseText);
+              if (parsed.error === 'TooHeavy' && parsed.message) {
+                errMsg = parsed.message;
+              }
+            } catch { /* ignore */ }
+            reject(new Error(errMsg || `Ошибка сервера: статус ${xhr.status}`));
+          }
+        };
+
+        xhr.onerror = () => {
+          reject(new Error('Network error during upload.'));
+        };
+
+        try {
+          if (onProgress) onProgress('Загрузка файла...', 0);
+          xhr.send(file);
+        } catch (localErr: any) {
+          console.error('Fatal proxy upload failure:', localErr);
+          reject(new Error(localErr.message || 'не удалось записать файл'));
+        }
+      });
+    } catch (apiError: any) {
+      // Direct robust fallback to direct GitHub upload when local Express API is not reachable or throws
+      if (token) {
+        console.warn('Local file upload failed, fallback to direct GitHub upload:', apiError);
+        return this.uploadFileToGitHub(file, onProgress);
+      }
+      throw apiError;
+    }
   }
 
   // --- GETTERS ---
@@ -563,6 +733,131 @@ class SuguleDatabaseManager {
         // Ignore
       }
     }
+  }
+
+  // --- USER AUTHENTICATION & PROFILES ---
+
+  public async loginUser(identifier: string, passport: string): Promise<any> {
+    const cleanId = identifier.trim().toLowerCase();
+    
+    // First try standard local proxy Express API
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password: passport })
+      });
+      if (response.ok) {
+        return await response.json();
+      } else {
+        const err = await response.json();
+        throw new Error(err.error || 'Ошибка входа');
+      }
+    } catch (e: any) {
+      if (e.message !== 'Failed to fetch' && !e.message.includes('network error') && !e.message.includes('NetworkError')) {
+        throw e;
+      }
+      
+      // Offline / GitHub Pages Serverless Mode:
+      // Fetch latest database.json directly from connected GitHub repository
+      const db = await this.getGitHubDatabase();
+      const usersList = db?.users || JSON.parse(localStorage.getItem('SUGULE_LOCAL_USERS') || '[]');
+      
+      const found = usersList.find((u: any) => u.username.toLowerCase() === cleanId || u.email.toLowerCase() === cleanId);
+      if (!found) {
+        throw new Error('Пользователь с такими данными не найден.');
+      }
+      if (found.password !== passport) {
+        throw new Error('Неверный пароль. Попробуйте снова.');
+      }
+      
+      return found;
+    }
+  }
+
+  public async registerUser(username: string, email: string, passport: string, nickname: string): Promise<any> {
+    const cleanUser = username.trim().toLowerCase().replace(/\s+/g, '_');
+    const newUser = {
+      username: cleanUser,
+      nickname: nickname || username,
+      email: email,
+      password: passport,
+      avatar_url: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?q=80&w=200&h=200&fit=crop',
+      cover_url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1200&h=400&fit=crop',
+      description: 'Увлекаюсь booru-архивами и аниме искусством.',
+      role: 'user'
+    };
+
+    try {
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email, password: passport, nickname })
+      });
+      if (response.ok) {
+        return await response.json();
+      } else {
+        const err = await response.json();
+        throw new Error(err.error || 'Ошибка регистрации');
+      }
+    } catch (e: any) {
+      if (e.message !== 'Failed to fetch' && !e.message.includes('network error') && !e.message.includes('NetworkError')) {
+        throw e;
+      }
+
+      // Offline / GitHub Pages Serverless Mode:
+      const db = await this.getGitHubDatabase() || { posts: [], tags: [], comments: [], users: [] };
+      if (!db.users) db.users = [];
+
+      const exists = db.users.some((u: any) => u.username.toLowerCase() === cleanUser);
+      if (exists) {
+        throw new Error('Пользователь с таким именем уже существует.');
+      }
+
+      db.users.push(newUser);
+      
+      const committed = await this.commitDbToGitHub(db);
+      if (!committed) {
+        console.warn('Direct GitHub registration commit failed. Saving locally.');
+      }
+
+      // Cache locally
+      localStorage.setItem('SUGULE_LOCAL_USERS', JSON.stringify(db.users));
+      return newUser;
+    }
+  }
+
+  public async updateProfile(username: string, fields: Partial<any>): Promise<any> {
+    const cleanUser = username.trim().toLowerCase();
+
+    try {
+      const response = await fetch('/api/auth/update-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, fields })
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (e: any) {
+      // Continue to offline if fetch failed
+    }
+
+    // Serverless mode
+    const db = await this.getGitHubDatabase() || { posts: [], tags: [], comments: [], users: [] };
+    if (!db.users) db.users = [];
+
+    const idx = db.users.findIndex((u: any) => u.username.toLowerCase() === cleanUser);
+    if (idx !== -1) {
+      db.users[idx] = {
+        ...db.users[idx],
+        ...fields
+      };
+      await this.commitDbToGitHub(db);
+      localStorage.setItem('SUGULE_LOCAL_USERS', JSON.stringify(db.users));
+      return db.users[idx];
+    }
+    throw new Error('Пользователь не найден в базе данных.');
   }
 
   public async getGitStatus(): Promise<any> {

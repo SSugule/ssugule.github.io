@@ -19,13 +19,27 @@ interface LocalDb {
   posts: any[];
   tags: any[];
   comments: any[];
+  users: any[];
+}
+
+function autoGitSync() {
+  console.log('[GIT-AUTO-SYNC] Initiating workspace repository sync...');
+  exec('git add database.json media/ && git commit -m "Auto-update database and media archives [skip ci]" && git push', (err, stdout, stderr) => {
+    if (err) {
+      console.warn('[GIT-AUTO-SYNC] Repo sync warning:', stderr?.trim() || err.message);
+    } else {
+      console.log('[GIT-AUTO-SYNC] Repo sync success:', stdout.trim());
+    }
+  });
 }
 
 function loadDb(): LocalDb {
   try {
     if (fs.existsSync(dbPath)) {
       const data = fs.readFileSync(dbPath, 'utf8');
-      return JSON.parse(data);
+      const db = JSON.parse(data);
+      if (!db.users) db.users = [];
+      return db;
     }
   } catch (err) {
     console.error('[JSON-DB] Error reading database.json:', err);
@@ -65,7 +79,19 @@ function loadDb(): LocalDb {
       text: c.text,
       created_at: c.created_at,
       likes: c.likes || 0
-    }))
+    })),
+    users: [
+      {
+        username: "admin",
+        nickname: "Администратор",
+        email: "admin@sugule.com",
+        password: "admin",
+        avatar_url: "https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?q=80&w=200&h=200&fit=crop",
+        cover_url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1200&h=400&fit=crop",
+        description: "Администратор архива Sugule.",
+        role: "admin"
+      }
+    ]
   };
   saveDb(initialDb);
   return initialDb;
@@ -74,6 +100,7 @@ function loadDb(): LocalDb {
 function saveDb(data: LocalDb) {
   try {
     fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), 'utf8');
+    autoGitSync();
   } catch (err) {
     console.error('[JSON-DB] Error saving database.json:', err);
   }
@@ -132,12 +159,15 @@ async function runQuery(sql: string, params: any[] = []): Promise<any> {
     return { changes: 1 };
   }
 
-  // 7. INSERT OR IGNORE INTO TAGS (NAME, CATEGORY, COUNT) VALUES (?, ?, ?)
-  if (normalizedSql.startsWith('INSERT OR IGNORE INTO TAGS')) {
+  // 7. INSERT OR IGNORE INTO TAGS (NAME, CATEGORY, COUNT) VALUES (?, ?, ?) / INSERT INTO TAGS
+  if (normalizedSql.startsWith('INSERT OR IGNORE INTO TAGS') || normalizedSql.startsWith('INSERT INTO TAGS')) {
     const [name, category, count] = params;
     const exists = db.tags.some(t => t.name.toLowerCase() === name.toLowerCase());
     if (!exists) {
       db.tags.push({ name: name.toLowerCase(), category, count: count || 1 });
+      saveDb(db);
+    } else {
+      db.tags = db.tags.map(t => t.name.toLowerCase() === name.toLowerCase() ? { ...t, count: (t.count || 0) + (count || 1) } : t);
       saveDb(db);
     }
     return { changes: 1 };
@@ -163,8 +193,8 @@ async function runQuery(sql: string, params: any[] = []): Promise<any> {
     return { changes: 1 };
   }
 
-  // 9. INSERT OR REPLACE INTO COMMENTS
-  if (normalizedSql.startsWith('INSERT OR REPLACE INTO COMMENTS')) {
+  // 9. INSERT OR REPLACE INTO COMMENTS / INSERT INTO COMMENTS
+  if (normalizedSql.startsWith('INSERT OR REPLACE INTO COMMENTS') || normalizedSql.startsWith('INSERT INTO COMMENTS')) {
     const [id, post_id, author, text, created_at, likes] = params;
     const newComment = { id, post_id, author, text, created_at, likes };
 
@@ -834,6 +864,102 @@ app.get('/api/git-status', async (req, res) => {
       dbSize: 0,
       error: err.message
     });
+  }
+});
+
+// --- DYNAMIC AUTH & USER STORAGE ROOT ENDPOINTS ---
+
+app.get('/api/users', (req, res) => {
+  try {
+    const db = loadDb();
+    return res.json(db.users || []);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/register', (req, res) => {
+  try {
+    const db = loadDb();
+    if (!db.users) db.users = [];
+    const { username, email, password, nickname } = req.body;
+    
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'Имя пользователя, Email и пароль обязательны.' });
+    }
+
+    const cleanUser = username.trim().toLowerCase().replace(/\s+/g, '_');
+    const exists = db.users.some(u => u.username.toLowerCase() === cleanUser);
+    if (exists) {
+      return res.status(400).json({ error: 'Пользователь с таким системным именем уже зарегистрирован.' });
+    }
+
+    const newUser = {
+      username: cleanUser,
+      nickname: nickname || username,
+      email: email.trim(),
+      password: password,
+      avatar_url: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?q=80&w=200&h=200&fit=crop',
+      cover_url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1200&h=400&fit=crop',
+      description: 'Увлекаюсь booru-архивами и аниме искусством.',
+      role: 'user'
+    };
+
+    db.users.push(newUser);
+    saveDb(db);
+    return res.json(newUser);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const db = loadDb();
+    const { identifier, password } = req.body;
+    
+    if (!identifier || !password) {
+      return res.status(400).json({ error: 'Введите имя пользователя/Email и пароль.' });
+    }
+
+    const cleanId = identifier.trim().toLowerCase();
+    const user = db.users.find(u => u.username.toLowerCase() === cleanId || u.email.toLowerCase() === cleanId);
+    
+    if (!user) {
+      return res.status(400).json({ error: 'Пользователь с такими учетными данными не найден.' });
+    }
+
+    if (user.password !== password) {
+      return res.status(400).json({ error: 'Неверный пароль. Попробуйте еще раз.' });
+    }
+
+    return res.json(user);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/update-profile', (req, res) => {
+  try {
+    const db = loadDb();
+    const { username, fields } = req.body;
+    
+    const cleanUser = username.trim().toLowerCase();
+    const idx = db.users.findIndex(u => u.username.toLowerCase() === cleanUser);
+    
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Пользователь не найден.' });
+    }
+
+    db.users[idx] = {
+      ...db.users[idx],
+      ...fields
+    };
+
+    saveDb(db);
+    return res.json(db.users[idx]);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
 });
 

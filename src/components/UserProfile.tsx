@@ -96,6 +96,20 @@ export const UserProfile: React.FC<UserProfileProps> = ({
 
   const [refreshGitTrigger, setRefreshGitTrigger] = useState(0);
 
+  // GitHub credentials for Pages deployment mode
+  const [githubOwner, setGithubOwner] = useState(() => localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule');
+  const [githubRepo, setGithubRepo] = useState(() => localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io');
+  const [githubToken, setGithubToken] = useState(() => localStorage.getItem('SUGULE_GITHUB_TOKEN') || '');
+  const [githubBranch, setGithubBranch] = useState(() => localStorage.getItem('SUGULE_GITHUB_BRANCH') || 'main');
+
+  const handleSaveGithubSettings = () => {
+    localStorage.setItem('SUGULE_GITHUB_OWNER', githubOwner.trim());
+    localStorage.setItem('SUGULE_GITHUB_REPO', githubRepo.trim());
+    localStorage.setItem('SUGULE_GITHUB_TOKEN', githubToken.trim());
+    localStorage.setItem('SUGULE_GITHUB_BRANCH', githubBranch.trim());
+    triggerNotification('success', 'Настройки интеграции GitHub API успешно сохранены!');
+  };
+
   useEffect(() => {
     if (profileTab === 'settings') {
       const fetchGitStatus = async () => {
@@ -188,7 +202,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({
   // --- ACTIONS ---
 
   // SIGN UP ACTION
-  const handleSignUp = (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
 
@@ -222,70 +236,77 @@ export const UserProfile: React.FC<UserProfileProps> = ({
       return;
     }
 
-    // Persist to offline user profiles
-    localStorage.setItem('sugule_username', cleanUser);
-    localStorage.setItem('sugule_profile_nickname', suUsername.trim());
-    localStorage.setItem('sugule_profile_email', suEmail.trim());
-    localStorage.setItem('sugule_password', suPassword);
-    
-    setNickname(suUsername.trim());
-    setUserEmail(suEmail.trim());
+    try {
+      const user = await dbManager.registerUser(suUsername.trim(), suEmail.trim(), suPassword, suUsername.trim());
+      
+      localStorage.setItem('sugule_username', user.username);
+      localStorage.setItem('sugule_profile_nickname', user.nickname);
+      localStorage.setItem('sugule_profile_email', user.email);
+      localStorage.setItem('sugule_password', user.password);
+      localStorage.setItem('sugule_profile_avatar', user.avatar_url);
+      localStorage.setItem('sugule_profile_bg', user.cover_url);
+      localStorage.setItem('sugule_profile_desc', user.description);
 
-    // Login user
-    onLoginSuccess(cleanUser);
-    triggerNotification('success', 'Аккаунт успешно создан! Добро пожаловать.');
-    setProfileTab('favorites');
+      setNickname(user.nickname);
+      setUserEmail(user.email);
+      setUserDesc(user.description);
+      setAvatarUrl(user.avatar_url);
+      setBackgroundUrl(user.cover_url);
 
-    // reset fields
-    setSuUsername('');
-    setSuEmail('');
-    setSuPassword('');
-    setSuVerifyPassword('');
-    setSuAgreeTos(false);
-    setSuAgree18(false);
-    setCaptchaState('idle');
+      onLoginSuccess(user.username);
+      triggerNotification('success', 'Аккаунт успешно создан в репозитории! Добро пожаловать.');
+      setProfileTab('favorites');
+
+      setSuUsername('');
+      setSuEmail('');
+      setSuPassword('');
+      setSuVerifyPassword('');
+      setSuAgreeTos(false);
+      setSuAgree18(false);
+      setCaptchaState('idle');
+    } catch (err: any) {
+      triggerNotification('error', err.message || 'Ошибка регистрации.');
+    }
   };
 
   // SIGN IN ACTION
-  const handleSignIn = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
 
-    const identifier = siIdentifier.trim().toLowerCase();
-    const storedUsername = localStorage.getItem('sugule_username');
-    const storedEmail = localStorage.getItem('sugule_profile_email') || 'user@sugule.com';
-    const storedPassword = localStorage.getItem('sugule_password') || '1234';
+    const identifier = siIdentifier.trim();
+    const password = siPassword;
 
-    if (!identifier) {
-      triggerNotification('error', 'Введите Имя пользователя или Email.');
+    if (!identifier || !password) {
+      triggerNotification('error', 'Заполните все поля авторизации.');
       return;
     }
 
-    // Match credentials
-    const matchesUser = storedUsername && identifier === storedUsername.toLowerCase();
-    const matchesEmail = storedEmail && identifier === storedEmail.toLowerCase();
-    const isMockDefault = identifier === 'admin' || identifier === 'user'; // ease of preview
+    try {
+      const user = await dbManager.loginUser(identifier, password);
+      
+      localStorage.setItem('sugule_username', user.username);
+      localStorage.setItem('sugule_profile_nickname', user.nickname || user.username);
+      localStorage.setItem('sugule_profile_email', user.email || '');
+      localStorage.setItem('sugule_password', user.password);
+      localStorage.setItem('sugule_profile_avatar', user.avatar_url || '');
+      localStorage.setItem('sugule_profile_bg', user.cover_url || '');
+      localStorage.setItem('sugule_profile_desc', user.description || '');
 
-    if (isMockDefault || matchesUser || matchesEmail) {
-      if (siPassword === storedPassword || siPassword === 'admin' || siPassword === '1234') {
-        const loggedUser = matchesUser ? (storedUsername || 'user') : (isMockDefault ? identifier : 'user');
-        
-        // Ensure username is set
-        if (!localStorage.getItem('sugule_username')) {
-          localStorage.setItem('sugule_username', loggedUser);
-        }
+      setNickname(user.nickname || user.username);
+      setUserEmail(user.email || '');
+      setUserDesc(user.description || 'Увлекаюсь booru-архивами и аниме искусством.');
+      setAvatarUrl(user.avatar_url || 'https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?q=80&w=200&h=200&fit=crop');
+      setBackgroundUrl(user.cover_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1200&h=400&fit=crop');
 
-        onLoginSuccess(loggedUser);
-        triggerNotification('success', 'Успешная авторизация! Добро пожаловать в профиль.');
-        setProfileTab('favorites');
-        
-        setSiIdentifier('');
-        setSiPassword('');
-      } else {
-        triggerNotification('error', 'Неверный пароль. Попробуйте снова.');
-      }
-    } else {
-      triggerNotification('error', 'Пользователь с такими данными не найден.');
+      onLoginSuccess(user.username);
+      triggerNotification('success', 'Успешная авторизация! Добро пожаловать.');
+      setProfileTab('favorites');
+      
+      setSiIdentifier('');
+      setSiPassword('');
+    } catch (err: any) {
+      triggerNotification('error', err.message || 'Неверный пароль или имя пользователя.');
     }
   };
 
@@ -304,14 +325,19 @@ export const UserProfile: React.FC<UserProfileProps> = ({
   };
 
   // NICKNAME UPDATE
-  const handleUpdateNickname = () => {
+  const handleUpdateNickname = async () => {
     const cleanNick = nickname.trim();
     if (!cleanNick) {
       triggerNotification('error', 'Никнейм не может быть пустым.');
       return;
     }
-    localStorage.setItem('sugule_profile_nickname', cleanNick);
-    triggerNotification('success', 'Никнейм успешно обновлен.');
+    try {
+      await dbManager.updateProfile(currentUsername, { nickname: cleanNick });
+      localStorage.setItem('sugule_profile_nickname', cleanNick);
+      triggerNotification('success', 'Никнейм сохранен в репозиторий.');
+    } catch (err: any) {
+      triggerNotification('error', 'Ошибка сохранения: ' + err.message);
+    }
   };
 
   // USERNAME UPDATE
@@ -322,29 +348,39 @@ export const UserProfile: React.FC<UserProfileProps> = ({
       return;
     }
     localStorage.setItem('sugule_username', cleanUser);
-    onLoginSuccess(cleanUser); // Sync back to App
+    onLoginSuccess(cleanUser);
     triggerNotification('success', 'Системное имя пользователя обновлено.');
   };
 
   // DESCRIPTION UPDATE
-  const handleUpdateDesc = () => {
-    localStorage.setItem('sugule_profile_desc', userDesc);
-    triggerNotification('success', 'Описание профиля сохранено.');
+  const handleUpdateDesc = async () => {
+    try {
+      await dbManager.updateProfile(currentUsername, { description: userDesc });
+      localStorage.setItem('sugule_profile_desc', userDesc);
+      triggerNotification('success', 'Описание профиля сохранено в репозиторий.');
+    } catch (err: any) {
+      triggerNotification('error', 'Ошибка сохранения: ' + err.message);
+    }
   };
 
   // EMAIL UPDATE
-  const handleUpdateEmail = () => {
+  const handleUpdateEmail = async () => {
     const cleanEmail = userEmail.trim();
     if (!cleanEmail.includes('@')) {
       triggerNotification('error', 'Введите действительный Email.');
       return;
     }
-    localStorage.setItem('sugule_profile_email', cleanEmail);
-    triggerNotification('success', 'Контактный Email обновлен.');
+    try {
+      await dbManager.updateProfile(currentUsername, { email: cleanEmail });
+      localStorage.setItem('sugule_profile_email', cleanEmail);
+      triggerNotification('success', 'Контактный Email сохранен в репозиторий.');
+    } catch (err: any) {
+      triggerNotification('error', 'Ошибка сохранения: ' + err.message);
+    }
   };
 
   // PASSWORD UPDATE
-  const handleUpdatePassword = () => {
+  const handleUpdatePassword = async () => {
     if (setNewPasswordVal.length < 4) {
       triggerNotification('error', 'Пароль должен быть длиной не менее 4 символов.');
       return;
@@ -353,10 +389,15 @@ export const UserProfile: React.FC<UserProfileProps> = ({
       triggerNotification('error', 'Пароли не совпадают.');
       return;
     }
-    localStorage.setItem('sugule_password', setNewPasswordVal);
-    triggerNotification('success', 'Пароль учетной записи успешно обновлен.');
-    setSetNewPasswordVal('');
-    setSetNewVerifyVal('');
+    try {
+      await dbManager.updateProfile(currentUsername, { password: setNewPasswordVal });
+      localStorage.setItem('sugule_password', setNewPasswordVal);
+      triggerNotification('success', 'Пароль успешного обновлен в репозитории.');
+      setSetNewPasswordVal('');
+      setSetNewVerifyVal('');
+    } catch (err: any) {
+      triggerNotification('error', 'Ошибка сохранения: ' + err.message);
+    }
   };
 
   // DELETE ACCOUNT
@@ -364,7 +405,6 @@ export const UserProfile: React.FC<UserProfileProps> = ({
     const confirmDelete = window.confirm('ВНИМАНИЕ: Вы действительно хотите навсегда удалить свою учетную запись? Это действие необратимо.');
     if (!confirmDelete) return;
 
-    // Clear all sugule credentials
     localStorage.removeItem('sugule_username');
     localStorage.removeItem('sugule_profile_nickname');
     localStorage.removeItem('sugule_profile_email');
@@ -386,16 +426,18 @@ export const UserProfile: React.FC<UserProfileProps> = ({
     try {
       const uploadedUrl = await dbManager.uploadFile(file);
       if (target === 'avatar') {
+        await dbManager.updateProfile(currentUsername, { avatar_url: uploadedUrl });
         setAvatarUrl(uploadedUrl);
         localStorage.setItem('sugule_profile_avatar', uploadedUrl);
-        triggerNotification('success', 'Аватар успешно загружен и сохранен в системе!');
+        triggerNotification('success', 'Аватар успешно загружен и применен в репозитории!');
       } else {
+        await dbManager.updateProfile(currentUsername, { cover_url: uploadedUrl });
         setBackgroundUrl(uploadedUrl);
         localStorage.setItem('sugule_profile_bg', uploadedUrl);
-        triggerNotification('success', 'Фон профиля успешно загружен и сохранен в системе!');
+        triggerNotification('success', 'Баннер профиля загружен и применен в репозитории!');
       }
     } catch (err: any) {
-      triggerNotification('error', 'Ошибка при загрузке: ' + err.message);
+      triggerNotification('error', 'Ошибка загрузки: ' + err.message);
     } finally {
       setIsUploadingFile(null);
     }
@@ -1656,6 +1698,81 @@ export const UserProfile: React.FC<UserProfileProps> = ({
                     Все ваши новые медиа, комментарии, голоса и свойства пишутся напрямую в файлы вашего веб-проекта. Выгрузка в ваш привязанный репозиторий GitHub происходит автоматически на стороне платформы AI Studio и не требует никаких токенов или иных паролей внутри интерфейса приложения.
                   </p>
                 </div>
+              </div>
+
+              {/* Row 4.1: Direct GitHub Pages Integration settings */}
+              <div className="bg-[#0b0c10] border border-zinc-900 rounded-xl p-5 space-y-4 shadow-xl">
+                <div className="flex items-start justify-between border-b border-zinc-900 pb-3">
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-bold text-zinc-200 tracking-tight flex items-center gap-2">
+                      <Database className="w-4 h-4 text-indigo-400" />
+                      Интеграция с хостингом GitHub Pages (ssugule.github.io)
+                    </h4>
+                    <p className="text-[10px] text-zinc-500 font-mono">Прямой доступ к репозиторию для автономной работы сайта после деплоя</p>
+                  </div>
+                  <span className="px-2 py-0.5 bg-indigo-950/40 border border-indigo-900/30 text-indigo-400 text-[9px] font-mono font-bold tracking-wider rounded uppercase">
+                    GitHub API
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-zinc-400 font-sans leading-relaxed">
+                  Если вы размещаете этот сайт на GitHub Pages (<code className="bg-zinc-950 px-1 py-0.5 rounded font-mono text-indigo-400 text-[10px]">https://ssugule.github.io/</code>), у браузера посетителя нет прямого доступа к бэкенду на Node.js. Заполните данные вашего репозитория и персонального токена доступа (Personal Access Token), чтобы все загруженные медиа, новые публикации, регистрация и профили сохранялись напрямую в ваш репозиторий через официальный API!
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[9.5px] font-mono tracking-wider text-zinc-500 uppercase block font-bold">Владелец репозитория (Username)</label>
+                    <input 
+                      type="text" 
+                      value={githubOwner}
+                      onChange={(e) => setGithubOwner(e.target.value)}
+                      placeholder="ssugule"
+                      className="w-full bg-black/40 border border-zinc-850 focus:border-indigo-500 rounded-lg px-3 py-1.5 text-xs text-zinc-250 focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9.5px] font-mono tracking-wider text-zinc-500 uppercase block font-bold">Имя репозитория (Repository)</label>
+                    <input 
+                      type="text" 
+                      value={githubRepo}
+                      onChange={(e) => setGithubRepo(e.target.value)}
+                      placeholder="ssugule.github.io"
+                      className="w-full bg-black/40 border border-zinc-850 focus:border-indigo-500 rounded-lg px-3 py-1.5 text-xs text-zinc-250 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[9.5px] font-mono tracking-wider text-zinc-500 uppercase block font-bold">Персональный токен (GitHub PAT)</label>
+                    <input 
+                      type="password" 
+                      value={githubToken}
+                      onChange={(e) => setGithubToken(e.target.value)}
+                      placeholder="ghp_xxxxxxxxxxxx"
+                      className="w-full bg-black/40 border border-zinc-850 focus:border-indigo-500 rounded-lg px-3 py-1.5 text-xs text-zinc-250 focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9.5px] font-mono tracking-wider text-zinc-500 uppercase block font-bold">Ветка (Branch)</label>
+                    <input 
+                      type="text" 
+                      value={githubBranch}
+                      onChange={(e) => setGithubBranch(e.target.value)}
+                      placeholder="main"
+                      className="w-full bg-black/40 border border-zinc-850 focus:border-indigo-500 rounded-lg px-3 py-1.5 text-xs text-zinc-250 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveGithubSettings}
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-mono text-[10px] font-bold tracking-wider uppercase cursor-pointer transition flex items-center gap-1.5 shadow"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Сохранить настройки GitHub Pages
+                </button>
               </div>
 
               {/* Row 5: Permanently Delete Account danger zone */}
