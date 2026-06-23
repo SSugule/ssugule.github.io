@@ -2,9 +2,9 @@ import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
-import { createClient } from '@supabase/supabase-js';
+import { exec } from 'child_process';
+import sqlite3 from 'sqlite3';
 import { INITIAL_POSTS, INITIAL_TAGS, INITIAL_COMMENTS } from './src/sampleData';
-import pg from 'pg';
 
 dotenv.config();
 
@@ -13,159 +13,163 @@ app.use(express.json());
 
 const PORT = 3000;
 
-// Connect server-side Supabase client cleanly
-const stripQuotes = (str: string) => {
-  let s = str ? str.trim() : '';
-  if (s.startsWith('"') && s.endsWith('"')) s = s.slice(1, -1).trim();
-  if (s.startsWith("'") && s.endsWith("'")) s = s.slice(1, -1).trim();
-  return s;
-};
-
-// Auto-converts postgresql database URL string to Supabase API endpoint string
-const parseSupabaseUrl = (url: string): string => {
-  if (!url) return '';
-  url = url.trim();
-  if (url.startsWith('postgresql://') || url.startsWith('postgres://')) {
-    const match = url.match(/db\.([a-z0-9]+)\.supabase\.co/i);
-    if (match && match[1]) {
-      return `https://${match[1]}.supabase.co`;
-    }
+// Setup sqlite3 database connection
+const dbPath = path.resolve(process.cwd(), 'database.sqlite');
+const sqlDb = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('[SQLITE] Database opening error:', err.message);
+  } else {
+    console.log('[SQLITE] Connected successfully to local database: database.sqlite');
   }
-  return url;
-};
+});
 
-const rawUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-const rawKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-
-let supabaseUrl = parseSupabaseUrl(stripQuotes(rawUrl));
-let supabaseKey = stripQuotes(rawKey);
-
-const fallbackUrl = 'https://erularobdstwkqtfemwh.supabase.co';
-const fallbackKey = 'sb_secret_2tC5crIRKxtTUAAkzXvZ7g_7LMHI0d-';
-
-// Validate URL has valid http/https scheme and is not empty or equal to "undefined" or placeholder
-if (!supabaseUrl || supabaseUrl === 'undefined' || !/^https?:\/\//i.test(supabaseUrl)) {
-  console.warn('[SUPABASE] URL is empty, "undefined", or invalid. Using stable fallback URL.');
-  supabaseUrl = fallbackUrl;
-}
-if (!supabaseKey || supabaseKey === 'undefined') {
-  console.warn('[SUPABASE] Key is empty or "undefined". Using stable fallback Key.');
-  supabaseKey = fallbackKey;
-}
-
-console.log('[SUPABASE] Server-side initialization target URL:', supabaseUrl);
-let supabase: any;
-try {
-  supabase = createClient(supabaseUrl, supabaseKey, {
-    auth: { persistSession: false }
-  });
-} catch (clientErr: any) {
-  console.error('[SUPABASE] Critical client instantiation failure. Re-initializing with stable default parameters:', clientErr.message || clientErr);
-  supabase = createClient(fallbackUrl, fallbackKey, {
-    auth: { persistSession: false }
+// Wrap sqlite3 operations in promises for beautiful async/await flow
+function runQuery(sql: string, params: any[] = []): Promise<any> {
+  return new Promise((resolve, reject) => {
+    sqlDb.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve(this);
+    });
   });
 }
 
-// Automatically ensure required columns and tables exist in their postgres/Supabase database
-async function runDatabaseMigrations() {
-  const rawUrlStr = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-  if (!rawUrlStr || !rawUrlStr.startsWith('postgres')) {
-    console.log('[MIGRATION] No local PostgreSQL connection URL string found. Skipping database schema migrations.');
-    return;
-  }
-  // Remove password brackets if present in URL
-  const connectionString = rawUrlStr.replace(':[', ':').replace(']@', '@');
-  const client = new pg.Client({ connectionString });
-  try {
-    await client.connect();
-    console.log('[MIGRATION] Connected to PostgreSQL. Checking tables integrity...');
-    
-    // 1. Alter posts table to add views column if missing
-    await client.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INT4 DEFAULT 0;`);
-    console.log('[MIGRATION] Checked: posts.views column (OK)');
-
-    // 2. Create favorites table if not exists
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS favorites (
-        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        post_id TEXT NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE (user_id, post_id)
-      );
-    `);
-    console.log('[MIGRATION] Checked: favorites table (OK)');
-
-    // 3. Create post_votes table if not exists for real user upvotes and downvotes
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS post_votes (
-        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        post_id TEXT NOT NULL,
-        vote_type TEXT NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE (user_id, post_id)
-      );
-    `);
-    console.log('[MIGRATION] Checked: post_votes table (OK)');
-
-    console.log('[MIGRATION] Schema migrations completed successfully!');
-  } catch (err: any) {
-    console.error('[MIGRATION] Run migrations warning/failure:', err.message);
-  } finally {
-    try {
-      await client.end();
-    } catch (e) {}
-  }
+function getQuery(sql: string, params: any[] = []): Promise<any> {
+  return new Promise((resolve, reject) => {
+    sqlDb.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
 }
 
-// Auto-create "media" public bucket if it does not already exist on Supabase Storage
-async function initStorageBucket() {
+function allQuery(sql: string, params: any[] = []): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    sqlDb.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+}
+
+// Database initial bootstrapping
+async function initDatabase() {
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS posts (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      rating TEXT NOT NULL,
+      score INTEGER NOT NULL DEFAULT 1,
+      elo INTEGER NOT NULL DEFAULT 1500,
+      uploader TEXT NOT NULL,
+      source_url TEXT,
+      description TEXT,
+      tags TEXT,
+      cover_url TEXT,
+      is_game INTEGER DEFAULT 0,
+      version TEXT,
+      screenshots TEXT,
+      download_pc TEXT,
+      download_mobile TEXT,
+      device_compatibility TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS tags (
+      name TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 1
+    )
+  `);
+
+  await runQuery(`
+    CREATE TABLE IF NOT EXISTS comments (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL,
+      author TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      likes INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+
+  // Auto-seed empty database
   try {
-    const { data: buckets, error: listErr } = await supabase.storage.listBuckets();
-    if (listErr) {
-      console.warn('[STORAGE] Could not list storage buckets:', listErr.message);
-      return;
-    }
-    const mediaExists = buckets?.some(b => b.name === 'media');
-    if (!mediaExists) {
-      console.log('[STORAGE] Public bucket "media" not found. Creating automatic public "media" bucket...');
-      const { error: makeBucketErr } = await supabase.storage.createBucket('media', {
-        public: true,
-        fileSizeLimit: 52428800 // 50MB maximum asset size
-      });
-      if (makeBucketErr) {
-        console.warn('[STORAGE] Failed to auto-create public bucket "media":', makeBucketErr.message);
-      } else {
-        console.log('[STORAGE] Successfully created and exposed "media" public storage bucket!');
+    const postCountRow = await getQuery('SELECT COUNT(*) as count FROM posts');
+    if (postCountRow.count === 0) {
+      console.log('[SQLITE] Fresh database detected. Seeding fallback INITIAL_POSTS, INITIAL_TAGS, and tags...');
+      
+      // Post tags seeding
+      for (const t of INITIAL_TAGS) {
+        await runQuery(
+          'INSERT OR IGNORE INTO tags (name, category, count) VALUES (?, ?, ?)',
+          [t.name.toLowerCase(), t.category, t.count || 1]
+        );
       }
-    } else {
-      console.log('[STORAGE] Public bucket "media" already detected on Cloud Supabase.');
+
+      // Posts seeding
+      for (const p of INITIAL_POSTS) {
+        await runQuery(
+          `INSERT OR REPLACE INTO posts (
+            id, title, url, rating, score, elo, uploader, source_url, description, 
+            tags, cover_url, is_game, version, screenshots, download_pc, download_mobile, 
+            device_compatibility, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            p.id,
+            p.title || 'Untitled',
+            p.url,
+            p.rating,
+            p.score || 1,
+            p.elo || 1500,
+            p.uploader || 'Anonymous',
+            p.source_url || null,
+            p.description || null,
+            JSON.stringify(p.tags || []),
+            p.cover_url || null,
+            p.is_game ? 1 : 0,
+            p.version || null,
+            JSON.stringify(p.screenshots || []),
+            p.download_pc || null,
+            p.download_mobile || null,
+            p.device_compatibility || null,
+            p.created_at || new Date().toISOString()
+          ]
+        );
+      }
+
+      // Seed comments
+      for (const c of INITIAL_COMMENTS) {
+        await runQuery(
+          `INSERT OR REPLACE INTO comments (id, post_id, author, text, created_at, likes)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [c.id, c.post_id, c.author, c.text, c.created_at, c.likes || 0]
+        );
+      }
+
+      console.log('[SQLITE] Database seeding completed successfully.');
     }
   } catch (err: any) {
-    console.error('[STORAGE] Storage initialization warning (likely unconfigured credentials):', err.message || err);
+    console.error('[SQLITE] Seeding check failed:', err.message);
   }
 }
-initStorageBucket();
+
+// Call db initializer
+initDatabase().catch(err => {
+  console.error('[SQLITE] Database initialization failed:', err);
+});
 
 // Automatically ensure correct categories for added tags
 async function ensureTagsExistOnServer(tagNames: string[]) {
   if (!tagNames || tagNames.length === 0) return;
   try {
-    const { data: existingTags, error: selectErr } = await supabase
-      .from('tags')
-      .select('name')
-      .in('name', tagNames);
-    
-    if (selectErr) throw selectErr;
-
-    const existingNames = (existingTags || []).map(t => t.name.toLowerCase());
-    const missingNames = tagNames.filter(name => !existingNames.includes(name.toLowerCase()));
-
-    if (missingNames.length > 0) {
-      const newTags = missingNames.map(name => {
+    for (const name of tagNames) {
+      const lowerName = name.toLowerCase();
+      const existing = await getQuery('SELECT name FROM tags WHERE LOWER(name) = ?', [lowerName]);
+      if (!existing) {
         let category: 'character' | 'copyright' | 'artist' | 'general' | 'meta' = 'general';
-        const lowerName = name.toLowerCase();
         if (lowerName.endsWith('_maid') || lowerName.includes('miku') || lowerName.includes('asuka') || lowerName.includes('girl')) {
           category = 'character';
         } else if (lowerName.includes('vocaloid') || lowerName.includes('cyberpunk') || lowerName.includes('original')) {
@@ -175,103 +179,43 @@ async function ensureTagsExistOnServer(tagNames: string[]) {
         } else if (lowerName.includes('highres') || lowerName.includes('wallpaper')) {
           category = 'meta';
         }
-        return { name, category, count: 1 };
-      });
-      await supabase.from('tags').insert(newTags);
+        await runQuery('INSERT OR IGNORE INTO tags (name, category, count) VALUES (?, ?, ?)', [name, category, 1]);
+      } else {
+        await runQuery('UPDATE tags SET count = count + 1 WHERE LOWER(name) = ?', [lowerName]);
+      }
     }
   } catch (err: any) {
     console.error('[DATABASE] Error in ensureTagsExistOnServer:', err.message || err);
   }
 }
 
-// --- EXPRESS ENDPOINTS / PROXY CHANNELS ---
+// --- EXPRESS ENDPOINTS ---
 
-// 1. GET ALL POSTS WITH AUTO-SEEDING
+// 1. GET ALL POSTS
 app.get('/api/posts', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('posts')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const rows = await allQuery('SELECT * FROM posts');
+    const posts = rows.map((p: any) => ({
+      ...p,
+      is_game: p.is_game === 1,
+      tags: p.tags ? JSON.parse(p.tags) : [],
+      screenshots: p.screenshots ? JSON.parse(p.screenshots) : []
+    }));
 
-    if (error) throw error;
-
-    let posts = data || [];
-
-    // AUTO-SEEDING: Populate fresh DB if 0 posts exist
-    if (posts.length === 0) {
-      console.log('[DATABASE] Seeding detected: empty table. Populating fallback INITIAL_POSTS and tags...');
-      try {
-        // Safe tags insertion
-        if (INITIAL_TAGS.length > 0) {
-          const formattedTags = INITIAL_TAGS.map(t => ({ name: t.name, category: t.category }));
-          try {
-            await supabase.from('tags').insert(formattedTags);
-          } catch (e) {
-            console.warn('[DATABASE] Quiet tag seed insertion hint:', e);
-          }
-        }
-
-        // Clean posts insert
-        const postsToInsert = INITIAL_POSTS.map(p => ({
-          id: p.id,
-          title: p.title || '',
-          url: p.url,
-          rating: p.rating,
-          score: p.score || 1,
-          elo: p.elo || 1500,
-          created_at: p.created_at,
-          uploader: p.uploader,
-          source_url: p.source_url || null,
-          description: p.description || null,
-          tags: p.tags
-        }));
-
-        const { error: postsSeedErr, data: seededPosts } = await supabase
-          .from('posts')
-          .insert(postsToInsert)
-          .select();
-
-        if (postsSeedErr) throw postsSeedErr;
-        if (seededPosts && seededPosts.length > 0) {
-          posts = seededPosts;
-          console.log(`[DATABASE] Seeding complete! Succesfully loaded ${seededPosts.length} posts.`);
-
-          // Seed comments
-          const commentsToInsert = INITIAL_COMMENTS.map(c => ({
-            id: c.id,
-            post_id: c.post_id,
-            author: c.author,
-            text: c.text,
-            created_at: c.created_at,
-            likes: c.likes || 0
-          }));
-          try {
-            await supabase.from('comments').insert(commentsToInsert);
-          } catch (e) {
-            console.warn('[DATABASE] Quiet comments seed insertion hint:', e);
-          }
-        }
-      } catch (seedErr: any) {
-        console.error('[DATABASE] Seeding routine failed:', seedErr.message || seedErr);
-      }
-    }
-
+    // Sorting posts on descending datetime order
+    posts.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     return res.json(posts);
   } catch (err: any) {
     console.error('[DATABASE] Error fetching posts:', err.message || err);
-    return res.json(INITIAL_POSTS); // Fallback to avoid empty frontend load
+    return res.json(INITIAL_POSTS);
   }
 });
 
 // 2. GET ALL TAGS
 app.get('/api/tags', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('tags')
-      .select('*');
-    if (error) throw error;
-    return res.json(data || INITIAL_TAGS);
+    const tags = await allQuery('SELECT * FROM tags');
+    return res.json(tags.length > 0 ? tags : INITIAL_TAGS);
   } catch (err: any) {
     console.error('[DATABASE] Error fetching tags:', err.message || err);
     return res.json(INITIAL_TAGS);
@@ -282,14 +226,9 @@ app.get('/api/tags', async (req, res) => {
 app.get('/api/comments/:postId', async (req, res) => {
   try {
     const { postId } = req.params;
-    const { data, error } = await supabase
-      .from('comments')
-      .select('*')
-      .eq('post_id', postId)
-      .order('created_at', { ascending: true });
-
-    if (error) throw error;
-    return res.json(data || []);
+    const comments = await allQuery('SELECT * FROM comments WHERE post_id = ?', [postId]);
+    comments.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    return res.json(comments);
   } catch (err: any) {
     console.error('[DATABASE] Error fetching comments:', err.message || err);
     return res.json([]);
@@ -310,19 +249,48 @@ app.post('/api/posts', async (req, res) => {
       uploader: post.uploader || 'Администратор',
       source_url: post.source_url || null,
       description: post.description || null,
-      tags: post.tags || []
+      tags: post.tags || [],
+      cover_url: post.cover_url || null,
+      is_game: post.is_game || false,
+      version: post.version || null,
+      screenshots: post.screenshots || [],
+      download_pc: post.download_pc || null,
+      download_mobile: post.download_mobile || null,
+      device_compatibility: post.device_compatibility || null,
+      created_at: post.created_at || new Date().toISOString()
     };
 
-    // Ensure all tags exist
     await ensureTagsExistOnServer(postToInsert.tags);
 
-    const { data, error } = await supabase
-      .from('posts')
-      .insert([postToInsert])
-      .select();
+    await runQuery(
+      `INSERT OR REPLACE INTO posts (
+        id, title, url, rating, score, elo, uploader, source_url, description, 
+        tags, cover_url, is_game, version, screenshots, download_pc, download_mobile, 
+        device_compatibility, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        postToInsert.id,
+        postToInsert.title,
+        postToInsert.url,
+        postToInsert.rating,
+        postToInsert.score,
+        postToInsert.elo,
+        postToInsert.uploader,
+        postToInsert.source_url,
+        postToInsert.description,
+        JSON.stringify(postToInsert.tags),
+        postToInsert.cover_url,
+        postToInsert.is_game ? 1 : 0,
+        postToInsert.version,
+        JSON.stringify(postToInsert.screenshots),
+        postToInsert.download_pc,
+        postToInsert.download_mobile,
+        postToInsert.device_compatibility,
+        postToInsert.created_at
+      ]
+    );
 
-    if (error) throw error;
-    return res.json(data && data[0] ? data[0] : postToInsert);
+    return res.json(postToInsert);
   } catch (err: any) {
     console.error('[DATABASE] Error creating post:', err.message || err);
     return res.status(500).json({ error: err.message });
@@ -333,13 +301,29 @@ app.post('/api/posts', async (req, res) => {
 app.post('/api/comments', async (req, res) => {
   try {
     const comment = req.body;
-    const { data, error } = await supabase
-      .from('comments')
-      .insert([comment])
-      .select();
+    const commentToInsert = {
+      id: comment.id || `c_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      post_id: comment.post_id,
+      author: comment.author || 'Аноним',
+      text: comment.text || '',
+      created_at: comment.created_at || new Date().toISOString(),
+      likes: comment.likes || 0
+    };
 
-    if (error) throw error;
-    return res.json(data && data[0] ? data[0] : comment);
+    await runQuery(
+      `INSERT OR REPLACE INTO comments (id, post_id, author, text, created_at, likes)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        commentToInsert.id,
+        commentToInsert.post_id,
+        commentToInsert.author,
+        commentToInsert.text,
+        commentToInsert.created_at,
+        commentToInsert.likes
+      ]
+    );
+
+    return res.json(commentToInsert);
   } catch (err: any) {
     console.error('[DATABASE] Error creating comment:', err.message || err);
     return res.status(500).json({ error: err.message });
@@ -354,12 +338,7 @@ app.put('/api/posts/:postId/tags', async (req, res) => {
 
     await ensureTagsExistOnServer(tags);
 
-    const { error } = await supabase
-      .from('posts')
-      .update({ tags })
-      .eq('id', postId);
-
-    if (error) throw error;
+    await runQuery('UPDATE posts SET tags = ? WHERE id = ?', [JSON.stringify(tags || []), postId]);
     return res.json({ success: true });
   } catch (err: any) {
     console.error('[DATABASE] Error updating post tags:', err.message || err);
@@ -377,20 +356,33 @@ app.put('/api/posts/:postId', async (req, res) => {
       await ensureTagsExistOnServer(tags);
     }
 
-    const { error } = await supabase
-      .from('posts')
-      .update({
-        title,
-        url,
-        rating,
-        source_url,
-        description,
-        tags,
-        cover_url
-      })
-      .eq('id', postId);
+    const current = await getQuery('SELECT * FROM posts WHERE id = ?', [postId]);
+    if (!current) {
+      return res.status(404).json({ error: 'Post not found.' });
+    }
 
-    if (error) throw error;
+    await runQuery(
+      `UPDATE posts SET 
+        title = COALESCE(?, title),
+        url = COALESCE(?, url),
+        rating = COALESCE(?, rating),
+        source_url = ?,
+        description = ?,
+        tags = COALESCE(?, tags),
+        cover_url = ?
+      WHERE id = ?`,
+      [
+        title || null,
+        url || null,
+        rating || null,
+        source_url === undefined ? current.source_url : source_url,
+        description === undefined ? current.description : description,
+        tags ? JSON.stringify(tags) : null,
+        cover_url === undefined ? current.cover_url : cover_url,
+        postId
+      ]
+    );
+
     return res.json({ success: true });
   } catch (err: any) {
     console.error('[DATABASE] Error updating post details:', err.message || err);
@@ -403,34 +395,18 @@ app.post('/api/tags', async (req, res) => {
   try {
     const { name, category } = req.body;
     if (!name) return res.status(400).json({ error: 'Tag name is required.' });
-    
+
     const cleanName = name.trim().toLowerCase().replace(/\s+/g, '_');
     const validCategory = ['character', 'copyright', 'artist', 'general', 'meta'].includes(category) ? category : 'general';
-    
-    // Check if tag already exists in Supabase
-    const { data: existing, error: selectErr } = await supabase
-      .from('tags')
-      .select('name, category')
-      .eq('name', cleanName)
-      .maybeSingle();
-      
-    if (existing) {
-      // Update existing tag category
-      const { data: updated, error: updateErr } = await supabase
-        .from('tags')
-        .update({ category: validCategory })
-        .eq('name', cleanName)
-        .select();
-      if (updateErr) throw updateErr;
-      return res.json(updated && updated[0] ? updated[0] : { name: cleanName, category: validCategory });
+
+    const tag = await getQuery('SELECT * FROM tags WHERE LOWER(name) = ?', [cleanName]);
+    if (tag) {
+      await runQuery('UPDATE tags SET category = ? WHERE LOWER(name) = ?', [validCategory, cleanName]);
+      return res.json({ name: cleanName, category: validCategory, count: tag.count || 1 });
     } else {
-      // Create a new tag with custom category
-      const { data: inserted, error: insertErr } = await supabase
-        .from('tags')
-        .insert([{ name: cleanName, category: validCategory, count: 1 }])
-        .select();
-      if (insertErr) throw insertErr;
-      return res.json(inserted && inserted[0] ? inserted[0] : { name: cleanName, category: validCategory, count: 1 });
+      const newTag = { name: cleanName, category: validCategory, count: 1 };
+      await runQuery('INSERT INTO tags (name, category, count) VALUES (?, ?, ?)', [newTag.name, newTag.category, newTag.count]);
+      return res.json(newTag);
     }
   } catch (err: any) {
     console.error('[DATABASE] Error saving tag with custom category:', err.message || err);
@@ -438,146 +414,22 @@ app.post('/api/tags', async (req, res) => {
   }
 });
 
-// --- FAVORITES, VOTES, VIEWS ENDPOINTS ---
-
-// GET FAVORITES
-app.get('/api/favorites', async (req, res) => {
-  try {
-    const { userId } = req.query;
-    if (!userId) return res.status(400).json({ error: 'userId is required' });
-
-    const { data, error } = await supabase
-      .from('favorites')
-      .select('post_id')
-      .eq('user_id', userId);
-
-    if (error) throw error;
-    const postIds = (data || []).map((item: any) => item.post_id);
-    return res.json(postIds);
-  } catch (err: any) {
-    console.error('[DATABASE] Error getting favorites:', err.message || err);
-    return res.json([]);
-  }
-});
-
-// TOGGLE FAVORITE
-app.post('/api/favorites/toggle', async (req, res) => {
-  try {
-    const { userId, postId, isAdding } = req.body;
-    if (!userId || !postId) return res.status(400).json({ error: 'userId and postId are required' });
-
-    if (isAdding) {
-      const { error } = await supabase
-        .from('favorites')
-        .insert([{ user_id: userId, post_id: postId }]);
-      // Ignore duplicate insert errors gracefully (UNIQUE constraint helper)
-      if (error && !error.message.includes('duplicate')) throw error;
-    } else {
-      const { error } = await supabase
-        .from('favorites')
-        .delete()
-        .eq('user_id', userId)
-        .eq('post_id', postId);
-      if (error) throw error;
-    }
-
-    return res.json({ success: true });
-  } catch (err: any) {
-    console.error('[DATABASE] Error toggling favorite:', err.message || err);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// GET VOTES
-app.get('/api/votes', async (req, res) => {
-  try {
-    const { userId } = req.query;
-    if (!userId) return res.status(400).json({ error: 'userId is required' });
-
-    const { data, error } = await supabase
-      .from('post_votes')
-      .select('post_id, vote_type')
-      .eq('user_id', userId);
-
-    if (error) throw error;
-    const votes: Record<string, string> = {};
-    (data || []).forEach((item: any) => {
-      votes[item.post_id] = item.vote_type;
-    });
-    return res.json(votes);
-  } catch (err: any) {
-    console.error('[DATABASE] Error getting user votes:', err.message || err);
-    return res.json({});
-  }
-});
-
 // 7. VOTE ON A POST
 app.post('/api/posts/:postId/vote', async (req, res) => {
   try {
     const { postId } = req.params;
-    const { scoreDelta, userId, voteType } = req.body;
+    const { scoreDelta } = req.body;
 
-    if (userId && voteType !== undefined) {
-      if (voteType === null) {
-        await supabase
-          .from('post_votes')
-          .delete()
-          .eq('user_id', userId)
-          .eq('post_id', postId);
-      } else {
-        await supabase
-          .from('post_votes')
-          .upsert({ user_id: userId, post_id: postId, vote_type: voteType }, { onConflict: 'user_id,post_id' });
-      }
+    const post = await getQuery('SELECT score FROM posts WHERE id = ?', [postId]);
+    if (!post) {
+      return res.status(404).json({ error: 'Post not found.' });
     }
 
-    const { data: current, error: fetchErr } = await supabase
-      .from('posts')
-      .select('score')
-      .eq('id', postId)
-      .single();
-
-    if (fetchErr) throw fetchErr;
-
-    const newScore = (current?.score || 0) + scoreDelta;
-
-    const { error: updateErr } = await supabase
-      .from('posts')
-      .update({ score: newScore })
-      .eq('id', postId);
-
-    if (updateErr) throw updateErr;
+    const newScore = (post.score || 0) + scoreDelta;
+    await runQuery('UPDATE posts SET score = ? WHERE id = ?', [newScore, postId]);
     return res.json({ score: newScore });
   } catch (err: any) {
     console.error('[DATABASE] Error voting on post:', err.message || err);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// INCREMENT POST VIEWS
-app.post('/api/posts/:postId/view', async (req, res) => {
-  try {
-    const { postId } = req.params;
-
-    const { data: current, error: fetchErr } = await supabase
-      .from('posts')
-      .select('views')
-      .eq('id', postId)
-      .single();
-
-    if (fetchErr) throw fetchErr;
-
-    const newViews = (current?.views || 0) + 1;
-
-    const { error: updateErr } = await supabase
-      .from('posts')
-      .update({ views: newViews })
-      .eq('id', postId);
-
-    if (updateErr) throw updateErr;
-    return res.json({ views: newViews });
-  } catch (err: any) {
-    console.error('[DATABASE] Error incrementing views:', err.message || err);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -587,15 +439,11 @@ app.delete('/api/posts/:postId', async (req, res) => {
   try {
     const { postId } = req.params;
 
-    // Delete associated comments manually to satisfy any direct database constraints
-    await supabase.from('comments').delete().eq('post_id', postId);
+    // Delete associated comments from SQLite
+    await runQuery('DELETE FROM comments WHERE post_id = ?', [postId]);
+    // Delete post from SQLite
+    await runQuery('DELETE FROM posts WHERE id = ?', [postId]);
 
-    const { error } = await supabase
-      .from('posts')
-      .delete()
-      .eq('id', postId);
-
-    if (error) throw error;
     return res.json({ success: true });
   } catch (err: any) {
     console.error('[DATABASE] Error deleting post:', err.message || err);
@@ -603,85 +451,298 @@ app.delete('/api/posts/:postId', async (req, res) => {
   }
 });
 
-// 9. FILE UPLOAD HANDLER: SAVES PERMANENTLY TO SUPABASE STORAGE BUCKET 'MEDIA' ONLY
-app.post('/api/upload', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+// Media storage location configurations in the workspace root
+const mediaDir = path.resolve(process.cwd(), 'media');
+const chunksBaseDir = path.resolve(process.cwd(), 'chunks');
+
+if (!fs.existsSync(mediaDir)) {
+  fs.mkdirSync(mediaDir, { recursive: true });
+}
+if (!fs.existsSync(chunksBaseDir)) {
+  fs.mkdirSync(chunksBaseDir, { recursive: true });
+}
+
+// Serve /media directly
+app.use('/media', express.static(mediaDir));
+
+// HIGH PERFORMANCE UNIFIED BACKEND UPLOAD AND COMPRESSION PIPELINE (LOCAL STORAGE ONLY)
+async function handleUnifiedUploadAndCompression(
+  fileBuffer: Buffer,
+  safeName: string,
+  ext: string,
+  fileType: string
+): Promise<{ url?: string; error?: string; message?: string }> {
+
+  const isVideo = fileType.startsWith('video/') || ['mp4', 'webm', 'avi', 'mkv', 'mov'].includes(ext);
+  const sizeMb = fileBuffer.length / (1024 * 1024);
+
+  let bufferToSave = fileBuffer;
+  let finalName = safeName;
+
+  if (isVideo && fileBuffer.length > 50 * 1024 * 1024) {
+    console.log(`[FFMPEG] Large video upload detected: ${sizeMb.toFixed(2)} MB. Initiating high-compression fallback...`);
+
+    const tempInputPath = path.join(mediaDir, `temp_in_${Date.now()}_${safeName}`);
+    const tempOutputPath = path.join(mediaDir, `compressed_${Date.now()}_${safeName}`);
+
+    try {
+      // Write original file to temp to execute ffmpeg commands offline on disk
+      fs.writeFileSync(tempInputPath, fileBuffer);
+
+      // Perform H.264 high efficiency video compression using the globally available ffmpeg binary
+      const cmd = `ffmpeg -y -i "${tempInputPath}" -vcodec libx264 -crf 25 -preset fast -acodec aac -b:a 128k "${tempOutputPath}"`;
+
+      await new Promise<void>((resolve, reject) => {
+        exec(cmd, (err, stdout, stderr) => {
+          if (err) {
+            console.error('[FFMPEG] Compression process error:', err, stderr);
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
+
+      if (fs.existsSync(tempOutputPath)) {
+        const compressedStats = fs.statSync(tempOutputPath);
+        const compressedSizeMb = compressedStats.size / (1024 * 1024);
+        console.log(`[FFMPEG] Compression completed successfully! New size: ${compressedSizeMb.toFixed(2)} MB (Original: ${sizeMb.toFixed(2)} MB)`);
+
+        if (compressedStats.size > 100 * 1024 * 1024) {
+          console.warn(`[FFMPEG] Compressed video is still too large (${compressedSizeMb.toFixed(2)} MB). Rejecting...`);
+          try {
+            fs.unlinkSync(tempInputPath);
+            fs.unlinkSync(tempOutputPath);
+          } catch (delErr) { /* ignore */ }
+          return {
+            error: 'TooHeavy',
+            message: `Даже после автоматического сжатия видео слишком тяжелое (${compressedSizeMb.toFixed(1)} МБ) и превышает лимит сервера (100 МБ). Пожалуйста, укоротите его или уменьшите разрешение.`
+          };
+        }
+
+        // Read the compressed buffer to proceed
+        bufferToSave = fs.readFileSync(tempOutputPath);
+        // Clean up immediately
+        try {
+          fs.unlinkSync(tempInputPath);
+          fs.unlinkSync(tempOutputPath);
+        } catch (delErr) { /* ignore */ }
+      } else {
+        throw new Error('Compressed output file missing on disk.');
+      }
+    } catch (ffmpegErr: any) {
+      console.warn('[FFMPEG] Compression failed or ffmpeg not in PATH. Proceeding with saving standard file.', ffmpegErr.message || ffmpegErr);
+      try {
+        if (fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
+        if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+      } catch (delErr) { /* ignore */ }
+
+      // If original video size exceeds 100MB limit, we must reject it
+      if (sizeMb > 100) {
+        return {
+          error: 'TooHeavy',
+          message: `Видео файл слишком тяжелый (${sizeMb.toFixed(1)} МБ) и превышает максимальный лимит сервера (100 МБ). Пожалуйста, оптимизируйте видео перед загрузкой.`
+        };
+      }
+
+      console.log(`[FFMPEG] Gracefully proceeding store original video: ${sizeMb.toFixed(2)} MB`);
+      bufferToSave = fileBuffer;
+    }
+  }
+
+  try {
+    const localFilePath = path.join(mediaDir, finalName);
+    fs.writeFileSync(localFilePath, bufferToSave);
+
+    const fileUrl = `/media/${finalName}`;
+    console.log('[STORAGE] Saved uploaded media asset to:', fileUrl);
+    return { url: fileUrl };
+  } catch (err: any) {
+    console.error('[STORAGE] Error writing upload file:', err);
+    return { error: 'SaveErr', message: 'Не удалось сохранить файл на сервере.' };
+  }
+}
+
+// 9A. CHUNKED UPLOAD HANDLERS
+app.post('/api/upload-chunk', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+  try {
+    const chunkId = req.header('x-chunk-id') || '';
+    const chunkIndexStr = req.header('x-chunk-index') || '';
+    const chunkTotalStr = req.header('x-chunk-total') || '';
+    const rawFileName = req.header('x-file-name') || '';
+
+    if (!chunkId || chunkIndexStr === '' || !chunkTotalStr) {
+      return res.status(400).json({ error: 'Missing chunk metadata headers.' });
+    }
+
+    const chunkIndex = parseInt(chunkIndexStr, 10);
+    const chunkTotal = parseInt(chunkTotalStr, 10);
+    const fileBuffer = req.body;
+
+    if (!fileBuffer || fileBuffer.length === 0) {
+      return res.status(400).json({ error: 'Empty chunk payload.' });
+    }
+
+    const originalName = decodeURIComponent(rawFileName) || `${Date.now()}_chunk.bin`;
+    const safeName = originalName.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+
+    const progressDir = path.join(chunksBaseDir, chunkId);
+    if (!fs.existsSync(progressDir)) {
+      fs.mkdirSync(progressDir, { recursive: true });
+    }
+
+    const chunkFilePath = path.join(progressDir, `${chunkIndex}`);
+    fs.writeFileSync(chunkFilePath, fileBuffer);
+
+    console.log(`[CHUNKS] Saved chunk ${chunkIndex + 1}/${chunkTotal} for ID: ${chunkId}`);
+    return res.json({ status: 'ok', chunkIndex });
+  } catch (err: any) {
+    console.error('[CHUNKS] Error saving chunk:', err);
+    return res.status(500).json({ error: err.message || err });
+  }
+});
+
+app.post('/api/upload-complete', express.json(), async (req, res) => {
+  try {
+    const { chunkId, chunkTotal, fileName, fileType } = req.body;
+    if (!chunkId || !chunkTotal || !fileName) {
+      return res.status(400).json({ error: 'Missing completion parameters.' });
+    }
+
+    const total = parseInt(chunkTotal, 10);
+    const progressDir = path.join(chunksBaseDir, chunkId);
+
+    if (!fs.existsSync(progressDir)) {
+      return res.status(404).json({ error: 'Chunk folder not found. Upload might have expired.' });
+    }
+
+    // Read and verify all chunks exist
+    const buffers: Buffer[] = [];
+    for (let i = 0; i < total; i++) {
+      const chunkFile = path.join(progressDir, `${i}`);
+      if (!fs.existsSync(chunkFile)) {
+        return res.status(400).json({ error: `Missing chunk index ${i} of total ${total}.` });
+      }
+      buffers.push(fs.readFileSync(chunkFile));
+    }
+
+    // Merge buffers
+    const mergedBuffer = Buffer.concat(buffers);
+    console.log(`[CHUNKS] Successfully merged ${total} chunks for ${fileName}. Merged size: ${(mergedBuffer.length / 1024 / 1024).toFixed(2)} MB`);
+
+    // Clean up temporary chunk folder
+    try {
+      fs.rmSync(progressDir, { recursive: true, force: true });
+    } catch (rmErr) {
+      console.warn('[CHUNKS] Warning: Failed to clean up chunk directory:', rmErr);
+    }
+
+    const originalName = decodeURIComponent(fileName);
+    const safeName = originalName.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+    const ext = safeName.split('.').pop()?.toLowerCase() || '';
+
+    // Delegate to the unified processing and compression pipeline
+    const result = await handleUnifiedUploadAndCompression(mergedBuffer, safeName, ext, fileType);
+    if (result.error === 'TooHeavy') {
+      return res.status(400).json(result);
+    }
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[CHUNKS] Complete error:', err);
+    return res.status(500).json({ error: err.message || err });
+  }
+});
+
+// 9. FILE UPLOAD HANDLER: SAVES LOCAL MEDIA DIR
+app.post('/api/upload', express.raw({ type: '*/*', limit: '100mb' }), async (req, res) => {
   try {
     const rawFileName = req.header('x-file-name') || '';
-    const fileName = decodeURIComponent(rawFileName) || `${Date.now()}_${Math.random().toString(36).substring(2, 8)}.png`;
+    const originalName = decodeURIComponent(rawFileName) || `${Date.now()}_${Math.random().toString(36).substring(2, 8)}.png`;
+
+    const safeName = originalName.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+    const ext = safeName.split('.').pop()?.toLowerCase() || '';
     const fileBuffer = req.body;
 
     if (!fileBuffer || fileBuffer.length === 0) {
       return res.status(400).send('Empty file buffer payloads.');
     }
 
-    const ext = fileName.split('.').pop()?.toLowerCase();
-    let contentType = 'image/png';
-    if (ext === 'jpg' || ext === 'jpeg') contentType = 'image/jpeg';
-    else if (ext === 'gif') contentType = 'image/gif';
-    else if (ext === 'mp4') contentType = 'video/mp4';
-    else if (ext === 'webm') contentType = 'video/webm';
-    else if (ext === 'mp3') contentType = 'audio/mpeg';
-    else if (ext === 'pdf') contentType = 'application/pdf';
-
-    console.log(`[STORAGE] Uploading file to clean Supabase media bucket path: ${fileName} (${contentType})`);
-    
-    const { data, error: uploadErr } = await supabase.storage
-      .from('media')
-      .upload(fileName, fileBuffer, {
-        contentType,
-        cacheControl: '3600',
-        upsert: true
-      });
-
-    if (uploadErr) {
-      console.error('[STORAGE] Supabase upload failed:', uploadErr.message || uploadErr);
-      return res.status(500).json({
-        error: `Supabase Storage upload error: ${uploadErr.message || JSON.stringify(uploadErr)}. Ephemeral local disk upload fallback is disabled by administrative policy!`
-      });
+    const fileType = req.header('content-type') || '';
+    const result = await handleUnifiedUploadAndCompression(fileBuffer, safeName, ext, fileType);
+    if (result.error === 'TooHeavy') {
+      return res.status(400).json(result);
     }
-
-    const { data: publicUrlData } = supabase.storage
-      .from('media')
-      .getPublicUrl(fileName);
-
-    if (publicUrlData && publicUrlData.publicUrl) {
-      console.log('[STORAGE] Supabase Permanent Storage saved URL successfully:', publicUrlData.publicUrl);
-      return res.json({ url: publicUrlData.publicUrl });
-    }
-
-    return res.status(500).json({
-      error: 'Failed to retrieve public URL from Supabase storage after successful write.'
-    });
+    return res.json(result);
   } catch (err: any) {
     console.error('[STORAGE] Critical Express /api/upload error:', err);
     return res.status(500).json({
-      error: `Critical server-side storage error: ${err.message || err}. Ephemeral local disk upload fallback is completely disabled.`
+      error: `Critical server-side storage error: ${err.message || err}`
     });
   }
 });
 
-app.get('/api/supabase-config', (req, res) => {
+// 10. GET GIT STATUS AND DATABASE METRICS
+app.get('/api/git-status', async (req, res) => {
+  try {
+    const mediaFiles = fs.existsSync(mediaDir) ? fs.readdirSync(mediaDir).filter(f => f !== 'chunks' && !f.startsWith('.')) : [];
+
+    exec('git status --porcelain', (err, stdout, stderr) => {
+      const gitOutput = stdout || 'Рабочая директория чиста или git не отслеживается.';
+      const lines = gitOutput.split('\n').filter(l => l.trim() !== '');
+
+      let dbSize = 0;
+      try {
+        if (fs.existsSync(dbPath)) {
+          dbSize = fs.statSync(dbPath).size;
+        }
+      } catch (dbErr) { /* ignore */ }
+
+      return res.json({
+        initialized: !err,
+        statusLines: lines,
+        mediaFilesCount: mediaFiles.length,
+        mediaFiles: mediaFiles.slice(0, 30),
+        dbSize
+      });
+    });
+  } catch (err: any) {
+    return res.json({
+      initialized: false,
+      statusLines: [],
+      mediaFilesCount: 0,
+      mediaFiles: [],
+      dbSize: 0,
+      error: err.message
+    });
+  }
+});
+
+app.get('/api/db-config', (req, res) => {
   res.json({
-    url: supabaseUrl,
-    key: 'PUBLIC-PROXY-ACTIVE' // completely hidden sensitive keys from inspect consoles
+    isEnabled: true,
+    url: 'SQLITE_PORTABLE',
+    key: 'LOCAL_GIT_MEDIA'
   });
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    database_host: 'Express server connected to ' + supabaseUrl
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    const row = await getQuery('SELECT COUNT(*) as count FROM posts');
+    res.json({
+      status: 'ok',
+      database_host: `SQLite file-backed database connected successfully. Current posts count: ${row.count}`
+    });
+  } catch (err: any) {
+    res.json({
+      status: 'error',
+      message: err.message
+    });
+  }
 });
 
-// Setup dev server or static static assets
+// Setup dev server or static assets
 async function startServer() {
-  // Run Postgres DB automatic migrations checks on boot
-  await runDatabaseMigrations().catch(err => {
-    console.error('[MIGRATION] Migration error on startServer:', err);
-  });
-
-  const isProd = process.env.NODE_ENV === 'production' || 
+  const isProd = process.env.NODE_ENV === 'production' ||
                  (process.argv[1] && (process.argv[1].includes('dist/server.cjs') || process.argv[1].includes('server.cjs')));
 
   if (!isProd) {

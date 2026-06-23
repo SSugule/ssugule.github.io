@@ -1,34 +1,20 @@
-# Sugule Database
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+</div>
 
-Premium booru-style Media Database & Gallery with private passcode lock screen, clean Russian interface, and direct Supabase Cloud storage/comment integration.
+# Run and deploy your AI Studio app
 
-## 🔗 Ссылка на сайт (GitHub Pages и Google Cloud Run)
-👉 **[Открыть Sugule Database на Google Cloud Run](https://ais-pre-e4duaal75aupsld5v2ydzd-875637272747.europe-west2.run.app)**  
-👉 **[Открыть Sugule Database на GitHub Pages](https://ssugule.github.io/)**
+This contains everything you need to run your app locally.
 
----
+View your app in AI Studio: https://ai.studio/apps/8f9d4f8c-07a9-4711-8d02-1b49a9f4a571
 
-## 🛠️ Как настроить автоматическое развёртывание на GitHub Pages
+## Run Locally
 
-Чтобы ваш сайт заработал по ссылке, нужно один раз указать в настройках вашего GitHub-репозитория, чтобы развёртывание шло через современный механизм **GitHub Actions** (мы уже полностью настроили для вас автоматическую сборку и публикацию):
+**Prerequisites:**  Node.js
 
-1. **Включите поддержку GitHub Actions для Pages:**
-   * Перейдите во вкладку **Settings** (Настройки) в вашем репозитории на GitHub.
-   * В левом боковом меню выберите раздел **Pages** (Страницы).
-   * В блоке **Build and deployment** найдите выпадающий список **Source** (Источник) и измените его со значения *Deploy from a branch* на **GitHub Actions**.
 
-2. **Запустите автоматическую сборку:**
-   * Теперь при каждом пуше кода в ветку `main` или `master`, GitHub автоматически скомпилирует весь проект, запакует в оптимизированный статический билд и опубликует его.
-   * За ходом выполнения и развёртывания вы можете наблюдать во вкладке **Actions** в верхней панели вашего репозитория.
-
-Спустя 1-2 минуты GitHub обновит статус и ваш сайт по адресу **https://ssugule.github.io/** заработает в полную силу без белого экрана и ошибок путей!
-
----
-
-## ✨ Возможности проекта
-* 🔒 **Приватный экран блокировки (Passcode Lock)** — защита ваших медиа от посторонних глаз.
-* 📂 **Галерея и Буру-стиль** — умный поиск по тегам, категориям, авторам и рейтингу (Safe, Questionable, Explicit 18+).
-* 👾 **Игровой хаб (Games Hub)** — интерактивный архив с играми.
-* 🎥 **Встроенный медиаплеер** — корректное отображение артов, видео с регулировкой времени звука и воспроизведения, а также комиксов.
-* 💖 **Профиль пользователя** — любимые посты, списки воспроизведения (плейлисты), персональные настройки и избранные теги.
-* ☁️ **Интеграция с Supabase** — комментарии пользователей, отметки «Нравится», просмотры и безопасное хранение файлов.
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`

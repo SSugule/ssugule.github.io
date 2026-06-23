@@ -48,7 +48,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { Post, Tag, Comment, Playlist } from './types';
-import { dbManager } from './supabaseClient';
+import { dbManager } from './dbClient';
 import { INITIAL_POSTS, INITIAL_TAGS } from './sampleData';
 import { motion } from 'motion/react';
 import { UserProfile } from './components/UserProfile';
@@ -86,21 +86,6 @@ export default function App() {
   const [passcode, setPasscode] = useState('');
   const [isAuthorized, setIsAuthorized] = useState(true);
   const [passcodeError, setPasscodeError] = useState('');
-
-  // Password Recovery / Reset states
-  const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
-  const [recoveryPassword, setRecoveryPassword] = useState('');
-  const [recoveryError, setRecoveryError] = useState('');
-  const [recoverySuccess, setRecoverySuccess] = useState('');
-  const [isSavingRecovery, setIsSavingRecovery] = useState(false);
-
-  // Lockscreen Auth integration
-  const [lockTab, setLockTab] = useState<'passcode' | 'supabase'>('passcode');
-  const [lockMode, setLockMode] = useState<'login' | 'signup'>('login');
-  const [lockEmail, setLockEmail] = useState('');
-  const [lockPassword, setLockPassword] = useState('');
-  const [lockUsername, setLockUsername] = useState('');
-  const [lockFeedback, setLockFeedback] = useState<{type: 'success'|'error', text: string} | null>(null);
 
   // Main application data states
   const [posts, setPosts] = useState<Post[]>(INITIAL_POSTS);
@@ -247,6 +232,71 @@ export default function App() {
   const [gameDownloadMobile, setGameDownloadMobile] = useState('');
   const [gameDeviceCompatibility, setGameDeviceCompatibility] = useState<'all' | 'pc' | 'mobile'>('all');
   
+  // Automatic metadata / tags detection
+  const autoDetectTags = (fileName: string, mimeType: string, type: string): string[] => {
+    const detected: string[] = [];
+    const nameLower = fileName.toLowerCase();
+    const ext = nameLower.split('.').pop() || '';
+
+    // Detect tags based on category type
+    if (type === 'video') {
+      detected.push('video');
+    } else if (type === 'gif') {
+      detected.push('animated', 'gif');
+    } else if (type === 'comic') {
+      detected.push('comics', 'comic');
+    } else if (type === 'game') {
+      detected.push('game', 'playable');
+    } else if (type === 'audio') {
+      detected.push('audio', 'sound');
+    } else if (type === 'document') {
+      detected.push('document');
+    } else if (type === 'installer') {
+      detected.push('installer', 'executable');
+    }
+
+    // Detect tags based on file extension
+    if (ext === 'webm') {
+      detected.push('webm', 'video');
+    } else if (ext === 'mp4') {
+      detected.push('mp4', 'video');
+    } else if (ext === 'gif') {
+      detected.push('animated', 'gif');
+    } else if (ext === 'png') {
+      detected.push('png', 'still_image');
+    } else if (ext === 'jpg' || ext === 'jpeg') {
+      detected.push('jpeg', 'still_image');
+    } else if (ext === 'mp3' || ext === 'wav' || ext === 'flac') {
+      detected.push('audio', ext);
+    } else if (ext === 'pdf') {
+      detected.push('pdf', 'document');
+    } else if (ext === 'zip' || ext === 'rar' || ext === '7z') {
+      detected.push('archive');
+    } else if (ext === 'apk') {
+      detected.push('apk', 'android');
+    } else if (ext === 'exe') {
+      detected.push('exe', 'windows');
+    }
+
+    // Deduplicate and filter empty
+    return Array.from(new Set(detected)).filter(Boolean);
+  };
+
+  const appendAutoDetectedTags = (fileName: string, mimeType: string, type: string) => {
+    const autoTags = autoDetectTags(fileName, mimeType, type);
+    if (autoTags.length === 0) return;
+
+    // Split existing tags
+    const existingTags = uploadTagsString
+      .split(/[\s,]+/)
+      .map(t => t.trim())
+      .filter(t => t.length > 0);
+
+    // Merge them while maintaining user input
+    const merged = Array.from(new Set([...existingTags, ...autoTags]));
+    setUploadTagsString(merged.join(' '));
+  };
+  
   // Autocomplete suggestions
   const [mainTagSuggestions, setMainTagSuggestions] = useState<string[]>([]);
   const [customTagSuggestions, setCustomTagSuggestions] = useState<string[]>([]);
@@ -338,31 +388,40 @@ export default function App() {
       const file = e.target.files[0];
       setComicCoverFileName(file.name);
       setComicCoverFileState('uploading');
+      setComicCoverProgress(0);
       try {
-         const publicUrl = await dbManager.uploadFile(file);
+         const publicUrl = await dbManager.uploadFile(file, (status, pct) => {
+           if (typeof pct === 'number') {
+             setComicCoverProgress(pct);
+           }
+         });
          setComicCoverUrl(publicUrl);
          setComicCoverFileState('success');
+         setComicCoverProgress(100);
       } catch (err: any) {
          setComicCoverFileState('error');
+         setComicCoverProgress(0);
          alert('Ошибка загрузки обложки: ' + err.message);
       }
     }
   };
 
   // Comic specific upload file items
-  const [comicFiles, setComicFiles] = useState<{ name: string; state: 'idle' | 'uploading' | 'success' | 'error'; url?: string; size?: string; thumbnail?: string }[]>([]);
+  const [comicFiles, setComicFiles] = useState<{ name: string; state: 'idle' | 'uploading' | 'success' | 'error'; url?: string; size?: string; thumbnail?: string; progress?: number; statusText?: string }[]>([]);
 
-  // File upload state for Supabase storage
+  // File upload state for Git-tracked storage
   const [dragActive, setDragActive] = useState(false);
   const [uploadFileState, setUploadFileState] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
   const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [comicCoverProgress, setComicCoverProgress] = useState<number>(0);
 
   const [isSavingPost, setIsSavingPost] = useState(false);
   const [uploadSuccessMsg, setUploadSuccessMsg] = useState('');
   const [uploadErrorMsg, setUploadErrorMsg] = useState('');
 
-  // Supabase administration state
-  const [supabaseConfig, setSupabaseConfig] = useState({
+  // Local database administration config state
+  const [dbConfig, setDbConfig] = useState({
     isEnabled: false,
     url: '',
     key: ''
@@ -373,7 +432,7 @@ export default function App() {
   useEffect(() => {
     const autoConfigureDb = async () => {
       try {
-        const resp = await fetch('/api/supabase-config');
+        const resp = await fetch('/api/db-config');
         if (resp.ok) {
           const data = await resp.json();
           if (data.url && data.key) {
@@ -382,26 +441,12 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.error('Failed to auto-configure Supabase credentials on load:', err);
+        console.error('Failed to auto-configure local database credentials on load:', err);
       }
 
-      // Load Supabase specs
+      // Load database details
       const conf = dbManager.getConfiguration();
-      setSupabaseConfig(conf);
-
-      // Detect password reset recovery flow in Hash parameters
-      if (typeof window !== 'undefined' && window.location.hash) {
-        const hash = window.location.hash.slice(1);
-        const hashParams = new URLSearchParams(hash);
-        const accessToken = hashParams.get('access_token');
-        const typeParam = hashParams.get('type');
-        
-        if (typeParam === 'recovery' || accessToken) {
-          console.log('[RECOVERY] Detected recovery link back from email! Enabling recovery mode dialog.');
-          setShowRecoveryDialog(true);
-          setActiveTab('profile');
-        }
-      }
+      setDbConfig(conf);
 
       const savedViews = localStorage.getItem('sugule_recent_views');
       if (savedViews) {
@@ -435,27 +480,16 @@ export default function App() {
   const loadDatabase = async (silent = false) => {
     if (!silent) setIsLoadingDb(true);
     try {
-      // Direct session sync on boot to support seamless persistent user logins
-      const currentUser = await dbManager.getCurrentUser();
-      if (currentUser) {
-        dbManager.setActiveUserId(currentUser.id);
-        const name = currentUser.user_metadata?.username || currentUser.email || currentUser.id;
-        setUsername(name);
-        setIsSignedUp(true);
-        setIsAuthorized(true);
-      }
-
       const fetchedPosts = await dbManager.getPosts();
       const fetchedTags = await dbManager.getTags();
       const fetchedFavs = await dbManager.getFavorites();
-      const fetchedVotes = await dbManager.getUserVotes();
       
       const sanitizePosts = (items: Post[] | null): Post[] => {
         if (!items) return [];
         return items.map(p => ({
           ...p,
-          title: p.title || '',
-          description: p.description || ''
+          title: '',
+          description: ''
         }));
       };
 
@@ -468,12 +502,11 @@ export default function App() {
         setTags(fetchedTags && fetchedTags.length > 0 ? fetchedTags : INITIAL_TAGS);
       }
       setFavorites(fetchedFavs || []);
-      setUserVotes(fetchedVotes || {});
     } catch (e) {
-      console.error('Error fetching data from Supabase:', e);
+      console.error('Error fetching data from local database:', e);
       if (!silent) {
         const sanitizePosts = (items: Post[]): Post[] => {
-          return items.map(p => ({ ...p, title: p.title || '', description: p.description || '' }));
+          return items.map(p => ({ ...p, title: '', description: '' }));
         };
         setPosts(sanitizePosts(INITIAL_POSTS));
         setTags(INITIAL_TAGS);
@@ -495,95 +528,10 @@ export default function App() {
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await dbManager.signOut();
-    } catch {}
-    dbManager.setActiveUserId('');
+  const handleLogout = () => {
     setIsAuthorized(false);
     setPasscode('');
     localStorage.removeItem('sugule_authorized');
-    setIsSignedUp(false);
-    setUsername('');
-    localStorage.removeItem('sugule_username');
-  };
-
-  const handleSaveRecoveryPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const pass = recoveryPassword.trim();
-    if (pass.length < 6) {
-      setRecoveryError('Пароль должен состоять минимум из 6 символов.');
-      return;
-    }
-    setRecoveryError('');
-    setRecoverySuccess('');
-    setIsSavingRecovery(true);
-    try {
-      await dbManager.updatePassword(pass);
-      setRecoverySuccess('Ваш пароль успешно изменен! Вы можете продолжать работу с сайтом.');
-      setRecoveryPassword('');
-      setTimeout(() => {
-        if (typeof window !== 'undefined') {
-          window.location.hash = '';
-        }
-        setShowRecoveryDialog(false);
-      }, 5000);
-    } catch (err: any) {
-      setRecoveryError(`Ошибка смены пароля: ${err.message || err}`);
-    } finally {
-      setIsSavingRecovery(false);
-    }
-  };
-
-  const handleLockSupabaseSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLockFeedback(null);
-    try {
-      if (lockMode === 'signup') {
-        const cleanUser = lockUsername.trim().toLowerCase().replace(/\s+/g, '_');
-        if (!cleanUser) {
-          setLockFeedback({ type: 'error', text: 'Имя пользователя не может быть пустым.' });
-          return;
-        }
-        if (lockPassword.length < 6) {
-          setLockFeedback({ type: 'error', text: 'Пароль должен состоять минимум из 6 символов.' });
-          return;
-        }
-        const { data, error } = await dbManager.signUp(lockEmail.trim(), lockPassword);
-        if (error) {
-          setLockFeedback({ type: 'error', text: `Ошибка регистрации: ${error.message}` });
-          return;
-        }
-        if (data?.user) {
-          dbManager.setActiveUserId(data.user.id);
-        }
-        localStorage.setItem('sugule_username', cleanUser);
-        localStorage.setItem('sugule_profile_nickname', lockUsername.trim());
-        localStorage.setItem('sugule_profile_email', lockEmail.trim());
-        setUsername(cleanUser);
-        setIsSignedUp(true);
-        setIsAuthorized(true);
-        setLockFeedback({ type: 'success', text: 'Регистрация прошла успешно!' });
-      } else {
-        const { data, error } = await dbManager.signIn(lockEmail.trim(), lockPassword);
-        if (error) {
-          setLockFeedback({ type: 'error', text: `Ошибка входа: ${error.message}` });
-          return;
-        }
-        const user = data?.user;
-        if (user) {
-          dbManager.setActiveUserId(user.id);
-          const userNick = user.user_metadata?.username || user.email?.split('@')[0] || 'Member';
-          localStorage.setItem('sugule_username', userNick);
-          localStorage.setItem('sugule_profile_email', user.email || '');
-          setUsername(userNick);
-          setIsSignedUp(true);
-          setIsAuthorized(true);
-        }
-      }
-    } catch (err: any) {
-      setLockFeedback({ type: 'error', text: `Критический сбой: ${err.message || err}` });
-    }
   };
 
   // Load more items triggers inside scroll when infinite pagination option gets toggled
@@ -703,9 +651,11 @@ export default function App() {
     }).slice(0, 15);
   }, [tagInputText, tags]);
 
-  // Helper to retrieve live views count directly from database column
+  // Helper to calculate mock views based on post properties
   const getPostViews = (post: Post) => {
-    return post.views || 0;
+    const titleText = post.title || post.id || '';
+    const codeSum = titleText.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    return (post.score * 15) + (codeSum % 900) + 120;
   };
 
   // Helper to determine styling for hot tags based on their category
@@ -977,12 +927,6 @@ export default function App() {
       localStorage.setItem('sugule_recent_views', JSON.stringify(updated));
       return updated;
     });
-
-    // Increment views dynamically in Supabase too
-    dbManager.incrementViews(post.id).then(newViews => {
-      setPosts(prevPosts => prevPosts.map(p => p.id === post.id ? { ...p, views: newViews } : p));
-      setSelectedPost(prev => prev && prev.id === post.id ? { ...prev, views: newViews } : prev);
-    }).catch(err => console.error('Views increment error:', err));
 
     // Populate dynamic media dimensions/size details
     const charCodeSum = post.id.split('').reduce((acc, current) => acc + current.charCodeAt(0), 0);
@@ -1272,7 +1216,7 @@ export default function App() {
     }
 
     try {
-      const newScore = await dbManager.votePost(postId, delta, nextVote);
+      const newScore = await dbManager.votePost(postId, delta);
       
       setUserVotes(prev => {
         const updated = { ...prev };
@@ -1520,17 +1464,24 @@ export default function App() {
 
   const processComicFiles = async (files: FileList) => {
     setUploadFileState('uploading');
+    setUploadProgress(0);
     setUploadErrorMsg('');
     const sortedFiles = Array.from(files).sort((a, b) => 
       a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
     );
+
+    if (sortedFiles.length > 0) {
+      appendAutoDetectedTags(sortedFiles[0].name, sortedFiles[0].type, 'comic');
+    }
 
     const newFilesList = sortedFiles.map((f) => ({
       name: f.name,
       state: 'uploading' as 'idle' | 'uploading' | 'success' | 'error',
       url: undefined as string | undefined,
       size: (f.size / 1024).toFixed(0) + ' KB',
-      thumbnail: f.type.startsWith('image/') ? URL.createObjectURL(f) : ''
+      thumbnail: f.type.startsWith('image/') ? URL.createObjectURL(f) : '',
+      progress: 0,
+      statusText: 'Подключение...'
     }));
     setComicFiles(newFilesList);
 
@@ -1540,11 +1491,27 @@ export default function App() {
     for (let i = 0; i < sortedFiles.length; i++) {
       const file = sortedFiles[i];
       try {
-        const publicUrl = await dbManager.uploadFile(file);
+        const publicUrl = await dbManager.uploadFile(file, (status, pct) => {
+          setComicFiles((prev) => {
+            const arr = [...prev];
+            if (arr[i]) {
+              arr[i] = {
+                ...arr[i],
+                progress: pct !== undefined ? pct : arr[i].progress,
+                statusText: status
+              };
+            }
+            return arr;
+          });
+          // Also set high-level upload stats in progress bar
+          const overallProgress = Math.round(((i + (pct !== undefined ? pct / 100 : 0)) / sortedFiles.length) * 100);
+          setUploadProgress(overallProgress);
+          setUploadFileName(`Загрузка страницы ${i + 1} из ${sortedFiles.length}...`);
+        });
         uploadedUrls.push(publicUrl);
-        updatedFilesList[i] = { ...updatedFilesList[i], state: 'success', url: publicUrl };
+        updatedFilesList[i] = { ...updatedFilesList[i], state: 'success', url: publicUrl, progress: 100, statusText: 'Готово!' };
       } catch (err: any) {
-        updatedFilesList[i] = { ...updatedFilesList[i], state: 'error', url: undefined };
+        updatedFilesList[i] = { ...updatedFilesList[i], state: 'error', url: undefined, statusText: err.message || 'Ошибка' };
       }
       setComicFiles([...updatedFilesList]);
     }
@@ -1553,9 +1520,11 @@ export default function App() {
     if (successfulUrls.length > 0) {
       setUploadUrl(JSON.stringify(successfulUrls));
       setUploadFileState('success');
+      setUploadProgress(100);
       setUploadFileName(`Комикс: ${successfulUrls.length} стр. загружено`);
     } else {
       setUploadFileState('error');
+      setUploadProgress(0);
       setUploadErrorMsg('Не удалось загрузить ни одного изображения для комикса.');
     }
   };
@@ -1563,21 +1532,32 @@ export default function App() {
   const processSelectedFile = async (file: File) => {
     setUploadFileName(file.name);
     setUploadFileState('uploading');
+    setUploadProgress(0);
     setUploadErrorMsg('');
+
+    appendAutoDetectedTags(file.name, file.type, uploadType);
 
     const sizeFormatted = (file.size / 1024).toFixed(0) + ' KB';
     const thumbUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : '';
-    setComicFiles([{ name: file.name, state: 'uploading', url: undefined, size: sizeFormatted, thumbnail: thumbUrl }]);
+    setComicFiles([{ name: file.name, state: 'uploading', url: undefined, size: sizeFormatted, thumbnail: thumbUrl, progress: 0, statusText: 'Загрузка файла...' }]);
 
     try {
-      const publicUrl = await dbManager.uploadFile(file);
+      const publicUrl = await dbManager.uploadFile(file, (status, pct) => {
+        setUploadFileName(status);
+        if (typeof pct === 'number') {
+          setUploadProgress(pct);
+          setComicFiles(prev => prev.map((f, i) => i === 0 ? { ...f, progress: pct, statusText: status } : f));
+        }
+      });
       setUploadUrl(publicUrl);
       setUploadFileState('success');
-      setComicFiles([{ name: file.name, state: 'success', url: publicUrl, size: sizeFormatted, thumbnail: thumbUrl }]);
+      setUploadProgress(100);
+      setComicFiles([{ name: file.name, state: 'success', url: publicUrl, size: sizeFormatted, thumbnail: thumbUrl, progress: 100, statusText: 'Файл успешно загружен!' }]);
     } catch (err: any) {
       setUploadFileState('error');
+      setUploadProgress(0);
       setUploadErrorMsg(err.message || 'Возникла непредвиденная ошибка при загрузке.');
-      setComicFiles([{ name: file.name, state: 'error', url: undefined, size: sizeFormatted, thumbnail: thumbUrl }]);
+      setComicFiles([{ name: file.name, state: 'error', url: undefined, size: sizeFormatted, thumbnail: thumbUrl, progress: 0, statusText: err.message || 'Ошибка загрузки.' }]);
     }
   };
 
@@ -1585,7 +1565,7 @@ export default function App() {
   const handlePublishPost = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadUrl.trim()) {
-      alert('Медиафайл не загружен на Supabase! Пожалуйста, выберите файл во фрейме слева.');
+      alert('Медиафайл не загружен на сервер! Пожалуйста, выберите и загрузите файл во фрейме слева.');
       return;
     }
 
@@ -1635,8 +1615,8 @@ export default function App() {
     };
 
     try {
-      await dbManager.createPost(newPost);
-      setUploadSuccessMsg(`Панель подтвердила: Работа успешно сохранена в вашей Supabase!`);
+       await dbManager.createPost(newPost);
+       setUploadSuccessMsg(`Панель подтвердила: Работа успешно сохранена в локальной базе данных!`);
       
       // Cleanup inputs
       setUploadTitle('');
@@ -1715,13 +1695,13 @@ export default function App() {
   if (!isAuthorized) {
     return (
       <div className="min-h-screen bg-[#07080a] flex items-center justify-center p-4 select-none font-sans">
-        <div className="bg-[#0f1115] border-2 border-emerald-500/30 w-full max-w-md rounded-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
+        <div className="bg-[#0f1115] border-2 border-emerald-500/30 w-full max-w-md rounded-2xl p-8 shadow-2xl relative overflow-hidden">
           
           <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-emerald-500 via-teal-400 to-indigo-500" />
           
           <div className="text-center space-y-4">
-            <div className="w-12 h-12 bg-emerald-950/30 rounded-full border border-emerald-500/20 flex items-center justify-center mx-auto shadow-lg">
-              <Lock className="w-5 h-5 text-emerald-400" />
+            <div className="w-14 h-14 bg-emerald-505/10 rounded-full border border-emerald-500/20 flex items-center justify-center mx-auto shadow-lg bg-emerald-950/30">
+              <Lock className="w-6 h-6 text-emerald-400" />
             </div>
             
             <div className="space-y-1">
@@ -1729,150 +1709,42 @@ export default function App() {
               <p className="text-xs text-zinc-400 font-mono">Вход ограничен • Закрытое сообщество</p>
             </div>
 
-            {/* TAB SELECTOR */}
-            <div className="grid grid-cols-2 p-1 bg-zinc-950 rounded-lg border border-zinc-900 font-mono text-[11px] select-none">
+            <p className="text-xs text-zinc-400 leading-relaxed pt-2">
+              Этот ресурс создан для узкого круга лиц. Пожалуйста, введите персональный пароль доступа для работы с медиаархивом и сохранения файлов.
+            </p>
+
+            <form onSubmit={handlePasscodeSubmit} className="space-y-4 pt-4">
+              <div className="space-y-1.5">
+                <input 
+                  type="password"
+                  value={passcode}
+                  onChange={(e) => setPasscode(e.target.value)}
+                  placeholder="Пароль доступа..."
+                  className="w-full text-center bg-[#07080a] border border-zinc-700/80 rounded-lg px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono focus:ring-1 focus:ring-emerald-500/30"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center justify-center gap-1.5 pt-1 font-mono text-[10px] text-emerald-400/90">
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Запомнить меня на этом устройстве</span>
+              </div>
+
+              {passcodeError && (
+                <p className="text-xs text-rose-400 font-mono">{passcodeError}</p>
+              )}
+
               <button
-                type="button"
-                onClick={() => { setLockTab('passcode'); setLockFeedback(null); }}
-                className={`py-1.5 rounded-md transition ${lockTab === 'passcode' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'}`}
+                type="submit"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-semibold py-2.5 rounded-lg text-xs tracking-wider uppercase transition shadow-lg shadow-emerald-950/40"
               >
-                Код доступа
+                Подтвердить доступ
               </button>
-              <button
-                type="button"
-                onClick={() => { setLockTab('supabase'); setLockFeedback(null); }}
-                className={`py-1.5 rounded-md transition ${lockTab === 'supabase' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'}`}
-              >
-                Supabase Auth
-              </button>
+            </form>
+
+            <div className="pt-6 border-t border-zinc-900 text-[10px] text-zinc-500 font-mono">
+              Подсказка: Код по умолчанию: <span className="text-zinc-400">sugule</span>
             </div>
-
-            {lockTab === 'passcode' ? (
-              <>
-                <p className="text-xs text-zinc-400 leading-relaxed pt-1">
-                  Этот ресурс создан для узкого круга лиц. Пожалуйста, введите персональный пароль доступа для работы с медиаархивом.
-                </p>
-
-                <form onSubmit={handlePasscodeSubmit} className="space-y-4 pt-2">
-                  <div className="space-y-1.5">
-                    <input 
-                      type="password"
-                      value={passcode}
-                      onChange={(e) => setPasscode(e.target.value)}
-                      placeholder="Пароль доступа..."
-                      className="w-full text-center bg-[#07080a] border border-zinc-700/80 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono focus:ring-1 focus:ring-emerald-500/30"
-                      required
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-center gap-1.5 pt-0.5 font-mono text-[10px] text-emerald-400/90">
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Запомнить меня на этом устройстве</span>
-                  </div>
-
-                  {passcodeError && (
-                    <p className="text-xs text-rose-400 font-mono">{passcodeError}</p>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-semibold py-2.5 rounded-lg text-xs tracking-wider uppercase transition shadow-lg"
-                  >
-                    Подтвердить доступ
-                  </button>
-                </form>
-
-                <div className="pt-4 border-t border-zinc-900 text-[10px] text-zinc-500 font-mono">
-                  Подсказка: Код по умолчанию: <span className="text-zinc-400 font-bold">sugule</span>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="text-xs text-zinc-400 leading-relaxed pt-1">
-                  Войдите или зарегистрируйтесь с вашей учетной записью через официальный Supabase API для персонального профиля.
-                </p>
-
-                <form onSubmit={handleLockSupabaseSubmit} className="space-y-3.5 pt-2 text-left select-text">
-                  {lockMode === 'signup' && (
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-mono font-semibold text-zinc-400 uppercase tracking-wider">Никнейм</label>
-                      <input 
-                        type="text"
-                        value={lockUsername}
-                        onChange={(e) => setLockUsername(e.target.value)}
-                        placeholder="Например, art_enjoyer"
-                        className="w-full bg-[#07080a] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono select-text"
-                        required
-                      />
-                    </div>
-                  )}
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-mono font-semibold text-zinc-400 uppercase tracking-wider">Email-адрес</label>
-                    <input 
-                      type="email"
-                      value={lockEmail}
-                      onChange={(e) => setLockEmail(e.target.value)}
-                      placeholder="your-email@sugule.com"
-                      className="w-full bg-[#07080a] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono select-text"
-                      required
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-mono font-semibold text-zinc-400 uppercase tracking-wider">Пароль</label>
-                    <input 
-                      type="password"
-                      value={lockPassword}
-                      onChange={(e) => setLockPassword(e.target.value)}
-                      placeholder="Минимум 6 символов..."
-                      className="w-full bg-[#07080a] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono select-text"
-                      required
-                    />
-                  </div>
-
-                  {lockFeedback && (
-                    <p className={`text-xs font-mono text-center ${lockFeedback.type === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {lockFeedback.text}
-                    </p>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-semibold py-2.5 rounded-lg text-xs tracking-wider uppercase transition shadow-lg"
-                  >
-                    {lockMode === 'login' ? 'Войти по Email' : 'Зарегистрировать профиль'}
-                  </button>
-
-                  <div className="text-center pt-1 font-mono text-[10px]">
-                    {lockMode === 'login' ? (
-                      <span className="text-zinc-550">
-                        Нет аккаунта?{' '}
-                        <button
-                          type="button"
-                          onClick={() => { setLockMode('signup'); setLockFeedback(null); }}
-                          className="text-emerald-400 hover:underline font-bold"
-                        >
-                          Регистрация
-                        </button>
-                      </span>
-                    ) : (
-                      <span className="text-zinc-550">
-                        Уже есть аккаунт?{' '}
-                        <button
-                          type="button"
-                          onClick={() => { setLockMode('login'); setLockFeedback(null); }}
-                          className="text-emerald-400 hover:underline font-bold"
-                        >
-                          Войти
-                        </button>
-                      </span>
-                    )}
-                  </div>
-                </form>
-              </>
-            )}
-
           </div>
         </div>
       </div>
@@ -2019,7 +1891,7 @@ export default function App() {
         )}
 
         {/* --- TAB 1: GALLERY ARCHIVE INDEX --- */}
-        {(activeTab === 'gallery' || !!selectedPost) && (
+        {activeTab === 'gallery' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
             
             {/* Backdrop for Drawer */}
@@ -2348,8 +2220,8 @@ export default function App() {
                   <span className="text-[10px] bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded font-mono text-zinc-500">{tags.length} всего</span>
                 </div>
 
-                {!supabaseConfig.isEnabled ? (
-                  <p className="text-xs text-zinc-500 italic font-mono">Подключите базу данных Supabase для загрузки актуального справочника тегов.</p>
+                {!dbConfig.isEnabled ? (
+                  <p className="text-xs text-zinc-500 italic font-mono">Подключите базу данных для загрузки актуального справочника тегов.</p>
                 ) : (
                   <div className="space-y-5">
                     {/* Character Tag block */}
@@ -2920,21 +2792,21 @@ export default function App() {
                     <div 
                       onTouchStart={handleTouchStart}
                       onTouchEnd={handleTouchEnd}
-                      className={`bg-black/95 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[260px] sm:min-h-[360px] transition-all duration-300 select-none shadow-2xl shadow-black/80 w-full ${
+                      className={`bg-black/95 border border-[#1a1c24] p-1.5 rounded-2xl flex flex-col items-center justify-center relative min-h-[300px] sm:min-h-[420px] transition-all duration-300 select-none shadow-2xl shadow-black/80 w-full ${
                         isZoomed 
                           ? 'max-h-none overflow-y-auto max-w-5xl' 
-                          : 'max-h-[65vh] md:max-h-[70vh] overflow-hidden max-w-4xl'
+                          : 'max-h-[85vh] overflow-hidden max-w-4xl'
                       }`}
                     >
                         {/* Interactive nav chevrons on sides */}
                         <button 
                           onClick={handlePrevAction}
-                          className="absolute left-4 top-1/2 -translate-y-1/2 p-2.5 rounded-full bg-black/85 border border-zinc-855 hover:border-violet-500 hover:text-white text-zinc-400 transition opacity-0 group-hover:opacity-100 focus:opacity-100 z-30 hidden sm:flex cursor-pointer"
+                          className="absolute left-4 top-1/2 -translate-y-1/2 p-2.5 rounded-full bg-black/85 border border-zinc-850 hover:border-violet-500 hover:text-white text-zinc-400 transition opacity-0 group-hover:opacity-100 focus:opacity-100 z-30 hidden sm:flex cursor-pointer"
                         >
                           <ChevronLeft className="w-5 h-5" />
                         </button>
- 
-                        <div className="w-full flex-grow flex items-center justify-center relative min-h-[220px] sm:min-h-[320px]">
+
+                        <div className="w-full flex-grow flex items-center justify-center relative min-h-[260px] sm:min-h-[360px]">
                           {/* Left / Right active overlay flip zones (DISABLED FOR VIDEOS OR WHEN ZOOMED) */}
                           {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && !isZoomed && (
                             <>
@@ -2945,12 +2817,12 @@ export default function App() {
                               />
                               <div 
                                 onClick={(e) => { e.stopPropagation(); handleNextAction(); }}
-                                className="absolute top-0 right-0 w-1/4 h-full cursor-e-resize z-25 hover:bg-gradient-to-l hover:from-white/[0.005] hover:to-transparent"
+                                className="absolute top-0 right-0 w-1/4 h-full cursor-e-resize z-20 hover:bg-gradient-to-l hover:from-white/[0.005] hover:to-transparent"
                                 title="Следующий (Клик)"
                               />
                             </>
                           )}
- 
+
                           {isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) ? (
                             <video 
                               key={isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url}
@@ -2959,7 +2831,7 @@ export default function App() {
                               autoPlay 
                               loop 
                               playsInline 
-                              className="max-h-[55vh] md:max-h-[60vh] w-auto max-w-full rounded-xl object-contain relative z-10 shadow-lg"
+                              className="max-h-[75vh] md:max-h-[80vh] w-auto max-w-full rounded-xl object-contain relative z-10 shadow-lg"
                             />
                           ) : isUrlDownloadable(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) ? (
                             <div className="flex flex-col items-center justify-center p-6 bg-[#0b0f19] border border-zinc-800 rounded-2xl space-y-4 max-w-md w-full relative z-30 text-center select-text shadow-xl">
@@ -2996,12 +2868,12 @@ export default function App() {
                               className={`${
                                 isZoomed 
                                   ? 'w-full h-auto max-w-none max-h-none cursor-zoom-out' 
-                                  : 'max-h-[55vh] md:max-h-[60vh] w-auto max-w-full cursor-zoom-in'
+                                  : 'max-h-[75vh] md:max-h-[80vh] w-auto max-w-full cursor-zoom-in'
                               } rounded-xl object-contain relative z-10 shadow-lg h-auto transition-all duration-300`}
                             />
                           )}
                         </div>
- 
+
                         {/* Expandable scale zoom action overlay indicator */}
                         {!isUrlVideo(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && !isUrlDownloadable(isPostComic(selectedPost) ? (getComicPages(selectedPost)[currentComicPage] || selectedPost.url) : selectedPost.url) && (
                           <button
@@ -3013,16 +2885,16 @@ export default function App() {
                             <span>{isZoomed ? "Вписать" : "100% размер"}</span>
                           </button>
                         )}
- 
+
                         <button 
                           onClick={handleNextAction}
                           className="absolute right-4 top-1/2 -translate-y-1/2 p-2.5 rounded-full bg-black/85 border border-zinc-855 hover:border-violet-500 hover:text-white text-zinc-400 transition opacity-0 group-hover:opacity-100 focus:opacity-100 z-30 hidden sm:flex cursor-pointer"
                         >
                           <ChevronRight className="w-5 h-5" />
                         </button>
- 
+
                         {/* Floating page reference indicator */}
-                        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/95 border border-zinc-850 px-4 py-1.5 rounded-full text-[10px] font-mono text-zinc-400 shadow-xl z-30 whitespace-nowrap">
+                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/95 border border-zinc-850 px-4 py-1.5 rounded-full text-[10px] font-mono text-zinc-400 shadow-xl z-30 whitespace-nowrap">
                           {isPostComic(selectedPost) ? (
                             <span>Страница <strong>{currentComicPage + 1}</strong> из <strong>{getComicPages(selectedPost).length}</strong></span>
                           ) : (
@@ -3167,11 +3039,147 @@ export default function App() {
                   </div>
                 ) : (
                 <>
-                  {/* GRID ITEMS CARDS LIST */}
+                  {/* Tag search panel */}
+                  <div className="bg-[#121318] border border-zinc-800 p-5 rounded-xl space-y-4">
+
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const parsed = tagInputText.toLowerCase().split(/\s+/).filter(Boolean);
+                    setSelectedTags(parsed);
+                    setShowTagSuggestions(false);
+                  }}
+                  className="flex flex-col sm:flex-row gap-2"
+                >
+                  <div className="relative flex-grow">
+                    <div className="flex items-center bg-[#0d0e11] border border-zinc-700/80 rounded-lg overflow-hidden focus-within:border-emerald-500 focus-within:shadow-[0_0_12px_rgba(16,185,129,0.15)] transition duration-150">
+                      <div className="pl-3 py-3 text-zinc-500 shrink-0">
+                        <Search className="w-4.5 h-4.5" />
+                      </div>
+                      <input 
+                        type="text"
+                        value={tagInputText}
+                        onChange={(e) => {
+                          setTagInputText(e.target.value);
+                          setShowTagSuggestions(true);
+                        }}
+                        onFocus={() => setShowTagSuggestions(true)}
+                        placeholder="hatsune_miku sky -comic -explicit..."
+                        className="w-full bg-transparent border-none text-sm text-white px-3 py-3 outline-none placeholder:text-zinc-650 font-mono"
+                      />
+                      {tagInputText && (
+                        <button 
+                          type="button" 
+                          onClick={() => {
+                            setTagInputText('');
+                            setSelectedTags([]);
+                            setShowTagSuggestions(false);
+                          }}
+                          className="p-1 text-zinc-500 hover:text-white mr-2 cursor-pointer"
+                          title="Очистить всё"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Tag Suggestions Dropdown */}
+                    {showTagSuggestions && filteredSuggestions.length > 0 && (
+                      <div className="absolute left-0 right-0 mt-1 bg-[#16181e] border border-zinc-700 rounded-lg shadow-2xl overflow-hidden z-35 divide-y divide-zinc-850 font-mono max-h-[300px] overflow-y-auto">
+                        {filteredSuggestions.map(tag => {
+                          let dotColor = 'bg-blue-400';
+                          let hoverBg = 'hover:bg-blue-950/20 hover:text-blue-300';
+                          let badgeBg = 'bg-blue-900/20 text-blue-400';
+                          
+                          if (tag.category === 'character') {
+                            dotColor = 'bg-emerald-400';
+                            hoverBg = 'hover:bg-emerald-950/30 hover:text-emerald-300';
+                            badgeBg = 'bg-emerald-950/40 text-emerald-400';
+                          } else if (tag.category === 'copyright') {
+                            dotColor = 'bg-purple-400';
+                            hoverBg = 'hover:bg-purple-950/30 hover:text-purple-300';
+                            badgeBg = 'bg-purple-950/40 text-purple-400';
+                          } else if (tag.category === 'artist') {
+                            dotColor = 'bg-rose-400';
+                            hoverBg = 'hover:bg-rose-950/30 hover:text-rose-300';
+                            badgeBg = 'bg-rose-950/40 text-rose-400';
+                          } else if (tag.category === 'meta') {
+                            dotColor = 'bg-zinc-400';
+                            hoverBg = 'hover:bg-zinc-900/60 hover:text-zinc-200';
+                            badgeBg = 'bg-zinc-800/50 text-zinc-400';
+                          }
+
+                          return (
+                            <div 
+                              key={tag.name}
+                              onClick={() => handleAddSearchTag(tag.name)}
+                              className={`px-4 py-2.5 text-xs flex items-center justify-between cursor-pointer transition duration-150 ${hoverBg}`}
+                            >
+                              <span className="flex items-center gap-2">
+                                <span className={`w-2 h-2 rounded-full ${dotColor}`} />
+                                <span className="font-semibold">{tag.name}</span>
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[9px] text-zinc-500">x{tag.count || 0}</span>
+                                <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${badgeBg}`}>{tag.category}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      type="submit"
+                      className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-mono text-sm font-bold uppercase tracking-wider rounded-lg transition duration-150 select-none cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Search className="w-4 h-4" />
+                      <span>Искать</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTagInputText('');
+                        setSelectedTags([]);
+                        setShowTagSuggestions(false);
+                      }}
+                      className="px-4 py-2.5 bg-zinc-900 border border-zinc-750 hover:bg-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono text-xs font-semibold rounded-lg transition duration-150 select-none cursor-pointer"
+                    >
+                      Сброс
+                    </button>
+                  </div>
+                </form>
+
+                {/* Display Chosen filters as categorized badges */}
+                {selectedTags.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 items-center bg-[#0d0e11] p-2.5 rounded-lg border border-zinc-800/80">
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-mono shrink-0 mr-1.5 font-bold">Активные фильтры:</span>
+                    {(Array.from(new Set(selectedTags)) as string[]).map(tag => renderTagBadge(tag, false, () => handleRemoveSearchTag(tag)))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTags([]);
+                        setTagInputText('');
+                      }}
+                      className="text-[10px] font-mono text-rose-400 hover:text-rose-300 ml-auto border border-rose-950 hover:bg-rose-950/20 px-2 py-0.5 rounded transition cursor-pointer"
+                    >
+                      Сбросить фильтры
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-zinc-500 text-xs font-mono py-1">
+                    🟢 Отображаются все публикации. Поддерживается поиск методом AND и исключение с помощью "-".
+                  </div>
+                )}
+              </div>
+
+              {/* GRID ITEMS CARDS LIST */}
               {isLoadingDb ? (
                 <div className="p-12 text-center bg-[#121318] border border-zinc-800 rounded-xl space-y-4">
                   <RefreshCw className="w-8 h-8 text-emerald-400 animate-spin mx-auto" />
-                  <p className="text-xs text-zinc-500 font-mono">Загрузка карточек из бэкенда Supabase...</p>
+                  <p className="text-xs text-zinc-500 font-mono">Загрузка карточек из бэкенда SQL SQLite...</p>
                 </div>
               ) : getFilteredPosts().length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -3217,9 +3225,6 @@ export default function App() {
                               src={getPostDisplayUrl(post)} 
                               alt="Медиа"
                               referrerPolicy="no-referrer"
-                              onError={(e) => {
-                                e.currentTarget.src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800";
-                              }}
                               className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 group-hover:brightness-[1.05]"
                             />
                           )}
@@ -3322,13 +3327,76 @@ export default function App() {
                     className="hidden" 
                   />
 
-                  <label htmlFor="file-upload-input" className="cursor-pointer space-y-3 block">
-                    <Upload className="w-10 h-10 text-zinc-500 mx-auto" />
-                    <div>
-                      <p className="text-sm font-bold text-white">Drop files here</p>
-                      <p className="text-xs text-zinc-500 mt-1">or click to browse</p>
+                  {uploadFileState === 'uploading' ? (
+                    <div className="py-6 px-4 flex flex-col items-center justify-center space-y-4 animate-fadeIn">
+                      {/* Large Circular Progress ring */}
+                      <div className="relative w-24 h-24 flex items-center justify-center filter drop-shadow-[0_0_12px_rgba(168,85,247,0.15)]">
+                        <svg className="w-full h-full transform -rotate-90">
+                          {/* Inner dark shadow */}
+                          <circle 
+                            cx="48" 
+                            cy="48" 
+                            r="38" 
+                            className="stroke-zinc-900" 
+                            strokeWidth="5" 
+                            fill="rgba(5, 5, 5, 0.4)" 
+                          />
+                          {/* Track circle */}
+                          <circle 
+                            cx="48" 
+                            cy="48" 
+                            r="38" 
+                            className="stroke-zinc-805/60" 
+                            strokeWidth="5" 
+                            fill="transparent" 
+                          />
+                          {/* Progress circle */}
+                          <circle 
+                            cx="48" 
+                            cy="48" 
+                            r="38" 
+                            className="stroke-purple-500 transition-all duration-300 ease-out" 
+                            strokeWidth="5" 
+                            fill="transparent" 
+                            strokeDasharray={2 * Math.PI * 38}
+                            strokeDashoffset={2 * Math.PI * 38 * (1 - uploadProgress / 100)}
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                        {/* Status text center */}
+                        <div className="absolute flex flex-col items-center justify-center text-center">
+                          <span className="text-xl font-mono font-extrabold text-white tracking-tighter">
+                            {uploadProgress}%
+                          </span>
+                          <span className="text-[9px] font-bold text-zinc-500 uppercase font-mono tracking-widest mt-0.5 animate-pulse">
+                            ACTIVE
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 max-w-sm mx-auto text-center">
+                        <p className="text-xs font-semibold text-purple-300 animate-pulse flex items-center justify-center gap-1.5 font-sans">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400" />
+                          Пожалуйста, подождите...
+                        </p>
+                        <p className="text-xs font-mono text-zinc-400 truncate max-w-xs">{uploadFileName || 'Запуск загрузки...'}</p>
+                        <div className="w-36 h-1.5 bg-zinc-950 border border-zinc-900 rounded-full mx-auto overflow-hidden shadow-inner">
+                          <div 
+                            className="h-full bg-gradient-to-r from-purple-600 to-violet-500 transition-all duration-300 ease-out rounded-full"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </label>
+                  ) : (
+                    <label htmlFor="file-upload-input" className="cursor-pointer space-y-3 block">
+                      <Upload className="w-10 h-10 text-zinc-500 mx-auto" />
+                      <div>
+                        <p className="text-sm font-bold text-white">Drop files here</p>
+                        <p className="text-xs text-zinc-500 mt-1">or click to browse</p>
+                      </div>
+                    </label>
+                  )}
                 </div>
 
                 {/* Grid for Media Type Selection (3 columns, 2/3 rows) */}
@@ -3394,7 +3462,29 @@ export default function App() {
                         </label>
                         <div className="overflow-hidden">
                           {comicCoverFileState === 'uploading' && (
-                            <span className="text-[10px] text-amber-500 font-mono animate-pulse">Загрузка...</span>
+                            <div className="flex items-center gap-2 text-amber-500 font-mono animate-fadeIn">
+                              {/* SVG Circle */}
+                              <div className="relative w-5 h-5 flex items-center justify-center shrink-0">
+                                <svg className="w-full h-full transform -rotate-90">
+                                  <circle cx="10" cy="10" r="7" className="stroke-zinc-800" strokeWidth="2" fill="transparent" />
+                                  <circle 
+                                    cx="10" 
+                                    cy="10" 
+                                    r="7" 
+                                    className="stroke-amber-500 transition-all duration-300" 
+                                    strokeWidth="2" 
+                                    fill="transparent" 
+                                    strokeDasharray={2 * Math.PI * 7}
+                                    strokeDashoffset={2 * Math.PI * 7 * (1 - (comicCoverProgress || 0) / 100)}
+                                    strokeLinecap="round"
+                                  />
+                                </svg>
+                                <span className="absolute text-[6.5px] font-bold font-mono text-amber-500">
+                                  {comicCoverProgress || 0}%
+                                </span>
+                              </div>
+                              <span className="text-[10px] animate-pulse">Загрузка обложки...</span>
+                            </div>
                           )}
                           {comicCoverFileState === 'success' && (
                             <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
@@ -3726,97 +3816,54 @@ export default function App() {
                           )}
 
                           <div className="text-[10px] font-mono font-bold">
-                            {f.state === 'uploading' && <span className="text-amber-500 animate-pulse">UPLOADING...</span>}
-                            {f.state === 'success' && <span className="text-emerald-400">SUCCESS</span>}
-                            {f.state === 'error' && <span className="text-rose-500">ERROR</span>}
+                            {f.state === 'uploading' && (
+                              <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded-lg animate-fadeIn text-amber-500">
+                                {/* SVG Circular Progress Loader */}
+                                <div className="relative w-6 h-6 flex items-center justify-center shrink-0">
+                                  <svg className="w-full h-full transform -rotate-90">
+                                    <circle 
+                                      cx="12" 
+                                      cy="12" 
+                                      r="9" 
+                                      className="stroke-zinc-800" 
+                                      strokeWidth="2" 
+                                      fill="transparent" 
+                                    />
+                                    <circle 
+                                      cx="12" 
+                                      cy="12" 
+                                      r="9" 
+                                      className="stroke-amber-500 transition-all duration-300" 
+                                      strokeWidth="2" 
+                                      fill="transparent" 
+                                      strokeDasharray={2 * Math.PI * 9}
+                                      strokeDashoffset={2 * Math.PI * 9 * (1 - (f.progress || 0) / 100)}
+                                      strokeLinecap="round"
+                                    />
+                                  </svg>
+                                  <span className="absolute text-[7px] font-mono font-extrabold text-amber-500">
+                                    {f.progress || 0}%
+                                  </span>
+                                </div>
+                                <div className="flex flex-col text-[8.5px] leading-tight text-left">
+                                  <span className="font-extrabold tracking-wider uppercase animate-pulse">ЗАГРУЗКА</span>
+                                  <span className="text-[7.5px] opacity-75 max-w-[90px] truncate">{f.statusText || 'Загрузка файла...'}</span>
+                                </div>
+                              </div>
+                            )}
+                            {f.state === 'success' && <span className="text-emerald-400 font-mono tracking-wider">SUCCESS</span>}
+                            {f.state === 'error' && (
+                              <div className="flex flex-col text-right">
+                                <span className="text-rose-500">ERROR</span>
+                                {f.statusText && <span className="text-[8px] text-zinc-500 font-mono truncate max-w-[120px]">{f.statusText}</span>}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
                 </div>
-
-                {/* Live Media Preview Widget */}
-                {uploadUrl && (
-                  <div className="space-y-3.5 border-t border-zinc-900 pt-5 animate-fadeIn">
-                    <h3 className="text-xs font-bold tracking-wider text-zinc-400 uppercase font-mono flex items-center gap-1.5 select-none">
-                      <span>👁️</span> <span>ПРЕДПРОСМОТР МЕДИА / MEDIA PREVIEW</span>
-                    </h3>
-                    <div className="bg-[#050608] border border-zinc-850 rounded-xl p-3 flex flex-col items-center justify-center min-h-[180px] relative overflow-hidden select-none shadow-inner">
-                      {(() => {
-                        let parsedUrls: string[] = [];
-                        try {
-                          if (uploadUrl.startsWith('[')) {
-                            parsedUrls = JSON.parse(uploadUrl);
-                          } else {
-                            parsedUrls = [uploadUrl];
-                          }
-                        } catch (e) {
-                          parsedUrls = [uploadUrl];
-                        }
-
-                        if (parsedUrls.length === 0) {
-                          return <span className="text-zinc-500 text-xs font-mono">Нет данных для предпросмотра</span>;
-                        }
-
-                        // Determine media types based on tags/formats
-                        const isVideo = parsedUrls[0].match(/\.(mp4|webm|ogg|mov)(\?|$)/i) || uploadType === 'video';
-                        const isAudio = parsedUrls[0].match(/\.(mp3|wav|ogg|aac|m4a)(\?|$)/i) || uploadType === 'audio';
-                        const isDownload = parsedUrls[0].match(/\.(exe|msi|zip|rar|7z|tar|gz|apk|dmg|pkg|bin)(\?|$)/i) || uploadType === 'installer';
-
-                        if (isVideo) {
-                          return (
-                            <video 
-                              src={parsedUrls[0]} 
-                              controls 
-                              className="max-h-52 rounded-xl w-auto max-w-full bg-black/95 my-1"
-                            />
-                          );
-                        } else if (isAudio) {
-                          return (
-                            <div className="w-full flex flex-col items-center gap-3 p-4 bg-zinc-950/40 border border-zinc-900 rounded-xl">
-                              <Music className="w-8 h-8 text-violet-400 animate-pulse" />
-                              <audio src={parsedUrls[0]} controls className="w-full shrink-0" />
-                              <span className="text-[10px] text-zinc-500 font-mono text-center">Аудиоплеер предпросмотра</span>
-                            </div>
-                          );
-                        } else if (isDownload) {
-                          return (
-                            <div className="flex flex-col items-center justify-center gap-3 text-center p-4 bg-[#090a10] border border-zinc-900 rounded-xl w-full">
-                              <div className="w-12 h-12 rounded-full bg-violet-600/10 flex items-center justify-center border border-violet-500/20 text-violet-400">
-                                <FolderDown className="w-6 h-6" />
-                              </div>
-                              <div className="space-y-1 overflow-hidden w-full px-2">
-                                <p className="text-xs font-mono text-zinc-200 truncate font-semibold">
-                                  {parsedUrls[0].split('/').pop()}
-                                </p>
-                                <p className="text-[10px] text-zinc-500 uppercase font-mono tracking-wider font-bold">Исполняемый файл / Установщик</p>
-                              </div>
-                            </div>
-                          );
-                        } else {
-                          // Regular image, GIF or Comic Page Slider
-                          return (
-                            <div className="space-y-2.5 w-full flex flex-col items-center justify-center">
-                              <img 
-                                src={parsedUrls[0]} 
-                                alt="Upload Preview" 
-                                className="max-h-56 rounded-xl w-auto max-w-full object-contain filter drop-shadow-md select-none"
-                                referrerPolicy="no-referrer"
-                              />
-                              {parsedUrls.length > 1 && (
-                                <div className="text-[10px] font-mono text-zinc-400 bg-zinc-950 border border-zinc-850 px-3 py-1 rounded-full flex items-center gap-2">
-                                  <span>📖</span>
-                                  <span>Страниц комикса: <strong>{parsedUrls.length}</strong></span>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        }
-                      })()}
-                    </div>
-                  </div>
-                )}
 
                 {uploadErrorMsg && (
                   <div className="p-3 bg-red-950/20 border border-red-900/40 text-red-300 rounded-xl text-xs font-mono">
@@ -3827,10 +3874,10 @@ export default function App() {
                 {uploadUrl && (
                   <div className="p-4 bg-emerald-950/20 border border-emerald-900/40 text-emerald-300 rounded-xl text-xs space-y-1.5 font-sans leading-relaxed select-text">
                     <p className="font-bold flex items-center gap-1.5 text-emerald-200">
-                      <span className="text-sm">🟢</span> Файл успешно загружен в облачное хранилище Supabase!
+                      <span className="text-sm">🟢</span> Файл успешно сохранен в локальную папку media!
                     </p>
                     <p className="text-[10.5px] text-zinc-400">
-                      Медиафайл сохранен в бакете <code className="bg-zinc-950 px-1.5 py-0.5 rounded text-rose-400 font-mono font-bold">media</code> вашего проекта Supabase и готов к постоянной публикации без риска удаления.
+                      Медиафайл записан в локальную директорию <code className="bg-zinc-950 px-1.5 py-0.5 rounded text-rose-400 font-mono font-bold">/media</code> и готов к синхронизации с вашим GitHub репозиторием при выгрузке.
                     </p>
                   </div>
                 )}
@@ -4457,55 +4504,6 @@ export default function App() {
 
           </div>
 
-        </div>
-      )}
-
-      {/* PASSWORD RECOVERY DIALOG */}
-      {showRecoveryDialog && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[99999] flex items-center justify-center p-4">
-          <div className="bg-[#0b0c11] border border-zinc-800 rounded-2xl max-w-md w-full p-6 md:p-8 space-y-6 shadow-2xl relative">
-            <h3 className="text-xl font-black text-white tracking-widest uppercase flex items-center gap-2">
-              <span className="text-emerald-400">🔑</span> Сброс и смена пароля
-            </h3>
-            
-            <p className="text-xs text-zinc-400 leading-relaxed font-mono">
-              Вы успешно перешли по ссылке из вашего электронного письма для восстановления пароля. Пожалуйста, введите ваш новый безопасный пароль ниже.
-            </p>
-
-            <form onSubmit={handleSaveRecoveryPassword} className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono tracking-widest text-zinc-400 block uppercase font-bold text-left">Новый пароль</label>
-                <input 
-                  type="password"
-                  required
-                  value={recoveryPassword}
-                  onChange={(e) => setRecoveryPassword(e.target.value)}
-                  placeholder="Минимум 6 символов..."
-                  className="w-full bg-black/40 border border-zinc-850 focus:border-violet-500 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-650 focus:outline-none"
-                />
-              </div>
-
-              {recoveryError && (
-                <div className="p-3 bg-red-950/70 border border-red-900 text-red-400 text-xs font-mono rounded-xl leading-relaxed text-left">
-                  ⚠️ {recoveryError}
-                </div>
-              )}
-
-              {recoverySuccess && (
-                <div className="p-3 bg-emerald-950/70 border border-emerald-900 text-emerald-400 text-xs font-mono rounded-xl leading-relaxed text-left">
-                  🟢 {recoverySuccess}
-                </div>
-              )}
-
-              <button 
-                type="submit"
-                disabled={isSavingRecovery}
-                className="w-full py-3 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 font-bold rounded-xl transition cursor-pointer font-mono text-xs tracking-wider uppercase shadow-lg shadow-violet-900/40"
-              >
-                {isSavingRecovery ? 'Сохранение...' : 'Установить новый пароль'}
-              </button>
-            </form>
-          </div>
         </div>
       )}
 

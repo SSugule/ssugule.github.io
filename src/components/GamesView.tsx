@@ -4,7 +4,7 @@ import {
   User, MessageSquare, ThumbsUp, ThumbsDown, Heart, Eye, Check, PlayCircle, Plus, Sparkles, AlertCircle
 } from 'lucide-react';
 import { Post, Comment } from '../types';
-import { dbManager } from '../supabaseClient';
+import { dbManager } from '../dbClient';
 
 interface GamesViewProps {
   posts: Post[];
