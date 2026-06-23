@@ -540,8 +540,13 @@ class SuguleDatabaseManager {
     });
 
     return Object.entries(counts).map(([name, count]) => {
-      let category: 'character' | 'copyright' | 'artist' | 'general' | 'meta' = 'general';
       const lowerName = name.toLowerCase();
+      const existingTag = INITIAL_TAGS.find(t => t.name.toLowerCase() === lowerName);
+      if (existingTag) {
+        return { name, category: existingTag.category, count };
+      }
+      
+      let category: 'character' | 'copyright' | 'artist' | 'general' | 'meta' = 'general';
       if (lowerName.endsWith('_maid') || lowerName.includes('miku') || lowerName.includes('asuka') || lowerName.includes('girl')) {
         category = 'character';
       } else if (lowerName.includes('vocaloid') || lowerName.includes('cyberpunk') || lowerName.includes('original')) {
@@ -564,27 +569,21 @@ class SuguleDatabaseManager {
       if (githubDb && githubDb.posts && Array.isArray(githubDb.posts)) {
         const parsedPosts = this.parseGithubPosts(githubDb.posts);
         
-        // Filter out standard (initial) posts so they never mix with repository posts
-        const customPosts = parsedPosts.filter(p => p && p.id && !initialPostIds.has(p.id));
-
-        if (customPosts.length > 0) {
-          console.log(`[SuguleDb] Loaded ${customPosts.length} custom posts from GitHub (standard posts hidden).`);
-          localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
-          
-          // Pre-populate/refresh local storage tags list derived from GitHub posts
-          const extractedTags = this.extractTagsFromPosts(customPosts);
-          localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
-          
-          return customPosts;
-        } else if (parsedPosts.length > 0) {
-          // Connected to GitHub but contains ONLY standard posts
-          console.log(`[SuguleDb] GitHub database contains only ${parsedPosts.length} standard posts.`);
-          localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(parsedPosts));
-          
-          const extractedTags = this.extractTagsFromPosts(parsedPosts);
-          localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
-          
-          return parsedPosts;
+        if (parsedPosts.length > 0) {
+          const customPosts = parsedPosts.filter(p => p && p.id && !initialPostIds.has(p.id));
+          if (customPosts.length > 0) {
+            console.log(`[SuguleDb] Loaded ${customPosts.length} custom posts from GitHub (standard posts hidden).`);
+            localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
+            const extractedTags = this.extractTagsFromPosts(customPosts);
+            localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
+            return customPosts;
+          } else {
+            console.log(`[SuguleDb] Successfully loaded standard posts directly from GitHub.`);
+            localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(parsedPosts));
+            const extractedTags = this.extractTagsFromPosts(parsedPosts);
+            localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
+            return parsedPosts;
+          }
         } else {
           // Connected to GitHub but contains 0 posts -> return standard posts only
           console.log('[SuguleDb] GitHub repository contains 0 posts. Showing standard posts.');
@@ -606,9 +605,13 @@ class SuguleDatabaseManager {
           const customPosts = posts.filter(p => p && p.id && !initialPostIds.has(p.id));
           if (customPosts.length > 0) {
             localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
+            const extractedTags = this.extractTagsFromPosts(customPosts);
+            localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
             return customPosts;
           } else {
             localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(posts));
+            const extractedTags = this.extractTagsFromPosts(posts);
+            localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
             return posts;
           }
         }

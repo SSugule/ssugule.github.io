@@ -368,6 +368,14 @@ app.get('/api/posts', async (req, res) => {
 
     // Sorting posts on descending datetime order
     posts.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    // Separate standard posts: do not mix if custom posts exist
+    const initialPostIds = new Set(INITIAL_POSTS.map(p => p.id));
+    const customPosts = posts.filter((p: any) => p && p.id && !initialPostIds.has(p.id));
+    if (customPosts.length > 0) {
+      return res.json(customPosts);
+    }
+
     return res.json(posts);
   } catch (err: any) {
     console.error('[DATABASE] Error fetching posts:', err.message || err);

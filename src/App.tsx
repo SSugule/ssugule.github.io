@@ -488,8 +488,8 @@ export default function App() {
         if (!items) return [];
         return items.map(p => ({
           ...p,
-          title: '',
-          description: ''
+          title: p.title || '',
+          description: p.description || ''
         }));
       };
 
@@ -506,7 +506,7 @@ export default function App() {
       console.error('Error fetching data from local database:', e);
       if (!silent) {
         const sanitizePosts = (items: Post[]): Post[] => {
-          return items.map(p => ({ ...p, title: '', description: '' }));
+          return items.map(p => ({ ...p, title: p.title || '', description: p.description || '' }));
         };
         setPosts(sanitizePosts(INITIAL_POSTS));
         setTags(INITIAL_TAGS);
