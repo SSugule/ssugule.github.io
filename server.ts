@@ -634,8 +634,24 @@ if (!fs.existsSync(chunksBaseDir)) {
   fs.mkdirSync(chunksBaseDir, { recursive: true });
 }
 
-// Serve /media directly
-app.use('/media', express.static(mediaDir));
+// Serve /media directly, falling back to GitHub raw content if the file doesn't exist locally
+app.get('/media/:filename', (req, res) => {
+  const filename = req.params.filename;
+  const localPath = path.join(mediaDir, filename);
+
+  if (fs.existsSync(localPath)) {
+    return res.sendFile(localPath);
+  }
+
+  // Fallback to GitHub raw files using default user repository
+  const owner = process.env.SUGULE_GITHUB_OWNER || 'ssugule';
+  const repo = process.env.SUGULE_GITHUB_REPO || 'ssugule.github.io';
+  const branch = process.env.SUGULE_GITHUB_BRANCH || 'main';
+
+  const githubRawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/media/${filename}`;
+  console.log(`[MEDIA-FALLBACK] Local file '${filename}' not found, redirecting to GitHub Raw: ${githubRawUrl}`);
+  return res.redirect(githubRawUrl);
+});
 
 // HIGH PERFORMANCE UNIFIED BACKEND UPLOAD AND COMPRESSION PIPELINE (LOCAL STORAGE ONLY)
 async function handleUnifiedUploadAndCompression(
