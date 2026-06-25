@@ -307,7 +307,7 @@ class SuguleDatabaseManager {
     const { token } = this.getGitHubSettings();
     
     // Check if we are running in full local server mode or GitHub pages
-    const isPages = window.location.hostname.includes('github.io') || !window.location.port;
+    const isPages = window.location.hostname.includes('github.io');
     if (isPages && token) {
       return this.uploadFileToGitHub(file, onProgress);
     }
