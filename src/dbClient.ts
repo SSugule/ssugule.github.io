@@ -1111,11 +1111,21 @@ class SuguleDatabaseManager {
       if (response.ok) {
         return await response.json();
       } else {
-        const err = await response.json();
-        throw new Error(err.error || 'Ошибка входа');
+        try {
+          const err = await response.json();
+          throw new Error(err.error || 'Ошибка входа');
+        } catch (jsonErr: any) {
+          if (jsonErr.message && (jsonErr.message.includes('Unexpected token') || jsonErr.message.includes('JSON'))) {
+            throw new Error('NOT_JSON_RESPONSE');
+          }
+          throw jsonErr;
+        }
       }
     } catch (e: any) {
-      if (e.message !== 'Failed to fetch' && !e.message.includes('network error') && !e.message.includes('NetworkError')) {
+      const isHtmlResponse = e.message === 'NOT_JSON_RESPONSE' || e instanceof SyntaxError || e.message.includes('Unexpected token') || e.message.includes('JSON');
+      const isNetworkError = e.message === 'Failed to fetch' || e.message.includes('network error') || e.message.includes('NetworkError');
+      
+      if (!isHtmlResponse && !isNetworkError) {
         throw e;
       }
       
@@ -1176,11 +1186,21 @@ class SuguleDatabaseManager {
         apiUserObj = await response.json();
         apiSucceeded = true;
       } else {
-        const err = await response.json();
-        throw new Error(err.error || 'Ошибка регистрации');
+        try {
+          const err = await response.json();
+          throw new Error(err.error || 'Ошибка регистрации');
+        } catch (jsonErr: any) {
+          if (jsonErr.message && (jsonErr.message.includes('Unexpected token') || jsonErr.message.includes('JSON'))) {
+            throw new Error('NOT_JSON_RESPONSE');
+          }
+          throw jsonErr;
+        }
       }
     } catch (e: any) {
-      if (e.message !== 'Failed to fetch' && !e.message.includes('network error') && !e.message.includes('NetworkError')) {
+      const isHtmlResponse = e.message === 'NOT_JSON_RESPONSE' || e instanceof SyntaxError || e.message.includes('Unexpected token') || e.message.includes('JSON');
+      const isNetworkError = e.message === 'Failed to fetch' || e.message.includes('network error') || e.message.includes('NetworkError');
+      
+      if (!isHtmlResponse && !isNetworkError) {
         throw e;
       }
     }
