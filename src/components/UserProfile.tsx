@@ -1698,6 +1698,75 @@ export const UserProfile: React.FC<UserProfileProps> = ({
                     Все ваши новые медиа, комментарии, голоса и свойства пишутся напрямую в файлы вашего веб-проекта. Выгрузка в ваш привязанный репозиторий GitHub происходит автоматически на стороне платформы AI Studio и не требует никаких токенов или иных паролей внутри интерфейса приложения.
                   </p>
                 </div>
+
+                {/* GitHub integration credential setup panel for Pages deployment */}
+                <div className="p-4 bg-[#0c0d12] border border-zinc-800 rounded-lg space-y-3">
+                  <span className="text-[10px] font-mono font-bold text-indigo-400 uppercase tracking-widest block border-b border-zinc-850 pb-1.5">
+                    Настройки авторизации GitHub API (для статического сайта ssugule.github.io)
+                  </span>
+                  <p className="text-[11px] text-zinc-400 font-sans leading-relaxed">
+                    Для того чтобы сайт <strong className="text-zinc-200">ssugule.github.io</strong> мог записывать новые публикации, удалять посты, оставлять комментарии и сохранять файлы напрямую в ваш репозиторий GitHub в режиме реального времени, укажите ваш токен доступа (PAT) ниже.
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1.5">
+                    <div className="space-y-1">
+                      <label className="text-[9.5px] font-mono text-zinc-500 uppercase font-bold">Владелец репозитория (Owner)</label>
+                      <input
+                        type="text"
+                        value={githubOwner}
+                        onChange={(e) => setGithubOwner(e.target.value)}
+                        placeholder="ssugule"
+                        className="w-full bg-black/50 border border-zinc-850 focus:border-indigo-500 rounded px-2.5 py-1.5 text-xs text-zinc-250 font-mono focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9.5px] font-mono text-zinc-500 uppercase font-bold">Имя репозитория (Repo)</label>
+                      <input
+                        type="text"
+                        value={githubRepo}
+                        onChange={(e) => setGithubRepo(e.target.value)}
+                        placeholder="ssugule.github.io"
+                        className="w-full bg-black/50 border border-zinc-850 focus:border-indigo-500 rounded px-2.5 py-1.5 text-xs text-zinc-250 font-mono focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9.5px] font-mono text-zinc-500 uppercase font-bold">Ветка репозитория (Branch)</label>
+                      <input
+                        type="text"
+                        value={githubBranch}
+                        onChange={(e) => setGithubBranch(e.target.value)}
+                        placeholder="main"
+                        className="w-full bg-black/50 border border-zinc-850 focus:border-indigo-500 rounded px-2.5 py-1.5 text-xs text-zinc-250 font-mono focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9.5px] font-mono text-zinc-500 uppercase font-bold">Токен доступа (Personal Access Token)</label>
+                      <input
+                        type="password"
+                        value={githubToken}
+                        onChange={(e) => setGithubToken(e.target.value)}
+                        placeholder="github_pat_..."
+                        className="w-full bg-black/50 border border-zinc-850 focus:border-indigo-500 rounded px-2.5 py-1.5 text-xs text-zinc-250 font-mono focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2">
+                    <span className="text-[9.5px] text-zinc-500 font-mono italic">
+                      {githubToken ? '✓ Токен введен' : '⚠ Требуется токен с разрешением "repo"'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleSaveGithubSettings();
+                        setRefreshGitTrigger(prev => prev + 1);
+                      }}
+                      className="px-4 py-1.5 bg-indigo-700 hover:bg-indigo-600 hover:border-indigo-400 text-white border border-indigo-800 rounded font-mono text-[10px] font-bold tracking-wider uppercase cursor-pointer transition"
+                    >
+                      Сохранить настройки GitHub
+                    </button>
+                  </div>
+                </div>
               </div>
 
 
