@@ -162,6 +162,7 @@ class SuguleDatabaseManager {
     const { owner, repo, branch } = this.getGitHubSettings();
     
     const urls = [
+      `./database.json`,
       `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/database.json`,
       `/${repo}/database.json`,
       `/database.json`
