@@ -727,16 +727,43 @@ class SuguleDatabaseManager {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(postToInsert)
       });
-      if (!response.ok) throw new Error('API create post failed');
-      const inserted = await response.json() as Post;
-      this.addPostToLocal(inserted);
-      return inserted;
+      if (response.ok) {
+        const inserted = await response.json() as Post;
+        this.addPostToLocal(inserted);
+        return inserted;
+      }
     } catch (e) {
-      console.warn('Backend proxy create post failed, saving in local offline backup:', e);
-      this.addPostToLocal(postToInsert as Post);
-      this.ensureTagsExistLocally(post.tags);
-      return postToInsert as Post;
+      // Proceed to serverless fallback
     }
+
+    console.warn('[DB] Backend proxy create post failed, saving directly to GitHub & localStorage...');
+    this.addPostToLocal(postToInsert as Post);
+    this.ensureTagsExistLocally(post.tags);
+
+    const db = await this.getGitHubDatabase() || { posts: [], tags: [], comments: [], users: [] };
+    if (!db.posts) db.posts = [];
+    
+    if (!db.posts.some((p: any) => p.id === postToInsert.id)) {
+      db.posts.unshift(postToInsert);
+    }
+    
+    if (!db.tags) db.tags = [];
+    for (const tagName of postToInsert.tags) {
+      const exists = db.tags.some((t: any) => t.name.toLowerCase() === tagName.toLowerCase());
+      if (!exists) {
+        db.tags.push({
+          id: `t_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          name: tagName,
+          category: 'general',
+          count: 1
+        });
+      } else {
+        db.tags = db.tags.map((t: any) => t.name.toLowerCase() === tagName.toLowerCase() ? { ...t, count: (t.count || 1) + 1 } : t);
+      }
+    }
+
+    await this.commitDbToGitHub(db);
+    return postToInsert as Post;
   }
 
   public async createComment(comment: Comment): Promise<Comment> {
@@ -746,15 +773,24 @@ class SuguleDatabaseManager {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(comment)
       });
-      if (!response.ok) throw new Error('API comment create failed');
-      const inserted = await response.json() as Comment;
-      this.addCommentToLocal(inserted);
-      return inserted;
+      if (response.ok) {
+        const inserted = await response.json() as Comment;
+        this.addCommentToLocal(inserted);
+        return inserted;
+      }
     } catch (e) {
-      console.warn('Backend proxy create comment failed, saving in local offline backup:', e);
-      this.addCommentToLocal(comment);
-      return comment;
+      // Proceed to serverless fallback
     }
+
+    console.warn('[DB] Backend proxy create comment failed, saving directly to GitHub...');
+    this.addCommentToLocal(comment);
+
+    const db = await this.getGitHubDatabase() || { posts: [], tags: [], comments: [], users: [] };
+    if (!db.comments) db.comments = [];
+    db.comments.push(comment);
+
+    await this.commitDbToGitHub(db);
+    return comment;
   }
 
   public async votePost(postId: string, scoreDelta: number): Promise<number> {
@@ -764,14 +800,29 @@ class SuguleDatabaseManager {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scoreDelta })
       });
-      if (!response.ok) throw new Error('API vote failed');
-      const { score } = await response.json();
-      this.updatePostScoreLocally(postId, score);
-      return score;
+      if (response.ok) {
+        const { score } = await response.json();
+        this.updatePostScoreLocally(postId, score);
+        return score;
+      }
     } catch (e) {
-      console.warn('Backend proxy vote failed, falling back to local offline backup score modification:', e);
-      return this.updatePostScoreLocally(postId, scoreDelta, true);
+      // Proceed to serverless fallback
     }
+
+    console.warn('[DB] Backend proxy vote failed, falling back to GitHub database score modification...');
+    const finalScore = this.updatePostScoreLocally(postId, scoreDelta, true);
+
+    const db = await this.getGitHubDatabase();
+    if (db && db.posts) {
+      db.posts = db.posts.map((p: any) => {
+        if (p.id === postId) {
+          return { ...p, score: (p.score || 0) + scoreDelta };
+        }
+        return p;
+      });
+      await this.commitDbToGitHub(db);
+    }
+    return finalScore;
   }
 
   public async updatePostTags(postId: string, tags: string[]): Promise<void> {
@@ -781,12 +832,40 @@ class SuguleDatabaseManager {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tags })
       });
-      if (!response.ok) throw new Error('API tag update failed');
-      this.updatePostTagsLocally(postId, tags);
+      if (response.ok) {
+        this.updatePostTagsLocally(postId, tags);
+        return;
+      }
     } catch (e) {
-      console.warn('Backend proxy tag update failed, saving in local offline backup:', e);
-      this.updatePostTagsLocally(postId, tags);
-      this.ensureTagsExistLocally(tags);
+      // Proceed to serverless fallback
+    }
+
+    console.warn('[DB] Backend proxy tag update failed, saving directly to GitHub...');
+    this.updatePostTagsLocally(postId, tags);
+    this.ensureTagsExistLocally(tags);
+
+    const db = await this.getGitHubDatabase();
+    if (db && db.posts) {
+      db.posts = db.posts.map((p: any) => {
+        if (p.id === postId) {
+          return { ...p, tags };
+        }
+        return p;
+      });
+      
+      // Ensure tags list updated too
+      if (!db.tags) db.tags = [];
+      for (const tName of tags) {
+        if (!db.tags.some((t: any) => t.name.toLowerCase() === tName.toLowerCase())) {
+          db.tags.push({
+            id: `t_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            name: tName,
+            category: 'general',
+            count: 1
+          });
+        }
+      }
+      await this.commitDbToGitHub(db);
     }
   }
 
@@ -797,14 +876,42 @@ class SuguleDatabaseManager {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fields)
       });
-      if (!response.ok) throw new Error('API post update failed');
-      this.updatePostLocally(postId, fields);
-    } catch (e) {
-      console.warn('Backend proxy post update failed, saving in local offline backup:', e);
-      this.updatePostLocally(postId, fields);
-      if (fields.tags) {
-        this.ensureTagsExistLocally(fields.tags);
+      if (response.ok) {
+        this.updatePostLocally(postId, fields);
+        return;
       }
+    } catch (e) {
+      // Proceed to serverless fallback
+    }
+
+    console.warn('[DB] Backend proxy post update failed, saving directly to GitHub...');
+    this.updatePostLocally(postId, fields);
+    if (fields.tags) {
+      this.ensureTagsExistLocally(fields.tags);
+    }
+
+    const db = await this.getGitHubDatabase();
+    if (db && db.posts) {
+      db.posts = db.posts.map((p: any) => {
+        if (p.id === postId) {
+          return { ...p, ...fields };
+        }
+        return p;
+      });
+      
+      if (fields.tags && db.tags) {
+        for (const tName of fields.tags) {
+          if (!db.tags.some((t: any) => t.name.toLowerCase() === tName.toLowerCase())) {
+            db.tags.push({
+              id: `t_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+              name: tName,
+              category: 'general',
+              count: 1
+            });
+          }
+        }
+      }
+      await this.commitDbToGitHub(db);
     }
   }
 
@@ -815,35 +922,49 @@ class SuguleDatabaseManager {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, category })
       });
-      if (!response.ok) throw new Error('API save tag failed');
-      const tagObj = await response.json() as Tag;
-      
-      // Sync local cache
-      const local = localStorage.getItem('SUGULE_LOCAL_TAGS');
-      let tags = INITIAL_TAGS;
-      if (local) {
-        try { tags = JSON.parse(local); } catch { tags = INITIAL_TAGS; }
+      if (response.ok) {
+        const tagObj = await response.json() as Tag;
+        
+        const local = localStorage.getItem('SUGULE_LOCAL_TAGS');
+        let tags = INITIAL_TAGS;
+        if (local) {
+          try { tags = JSON.parse(local); } catch { tags = INITIAL_TAGS; }
+        }
+        const filtered = tags.filter(t => t.name.toLowerCase() !== tagObj.name.toLowerCase());
+        const updated = [...filtered, tagObj];
+        localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(updated));
+        
+        return tagObj;
       }
-      const filtered = tags.filter(t => t.name.toLowerCase() !== tagObj.name.toLowerCase());
-      const updated = [...filtered, tagObj];
-      localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(updated));
-      
-      return tagObj;
     } catch (e) {
-      console.warn('Backend proxy saveTag failed, saving internally in offline cache:', e);
-      const cleanName = name.trim().toLowerCase().replace(/\s+/g, '_');
-      const tagObj: Tag = { name: cleanName, category, count: 1 };
-      
-      const local = localStorage.getItem('SUGULE_LOCAL_TAGS');
-      let tags = INITIAL_TAGS;
-      if (local) {
-        try { tags = JSON.parse(local); } catch { tags = INITIAL_TAGS; }
-      }
-      const filtered = tags.filter(t => t.name.toLowerCase() !== cleanName);
-      const updated = [...filtered, tagObj];
-      localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(updated));
-      return tagObj;
+      // Proceed to serverless fallback
     }
+
+    console.warn('[DB] Backend proxy saveTag failed, saving internally and directly to GitHub...');
+    const cleanName = name.trim().toLowerCase().replace(/\s+/g, '_');
+    const tagObj: Tag = { name: cleanName, category, count: 1 };
+    
+    const local = localStorage.getItem('SUGULE_LOCAL_TAGS');
+    let tags = INITIAL_TAGS;
+    if (local) {
+      try { tags = JSON.parse(local); } catch { tags = INITIAL_TAGS; }
+    }
+    const filtered = tags.filter(t => t.name.toLowerCase() !== cleanName);
+    const updated = [...filtered, tagObj];
+    localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(updated));
+
+    const db = await this.getGitHubDatabase() || { posts: [], tags: [], comments: [], users: [] };
+    if (!db.tags) db.tags = [];
+    if (!db.tags.some((t: any) => t.name.toLowerCase() === cleanName)) {
+      db.tags.push({
+        id: `t_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        name: cleanName,
+        category,
+        count: 1
+      });
+      await this.commitDbToGitHub(db);
+    }
+    return tagObj;
   }
 
   public async deletePost(postId: string): Promise<void> {
@@ -851,21 +972,37 @@ class SuguleDatabaseManager {
       const response = await fetch(`/api/posts/${postId}`, {
         method: 'DELETE'
       });
-      if (!response.ok) throw new Error('API delete post failed');
+      if (response.ok) {
+        this.removePostFromLocalCaches(postId);
+        return;
+      }
     } catch (e) {
-      console.warn('Backend proxy delete post failed, removing locally only:', e);
+      // Proceed to serverless fallback
     }
 
-    // Delete from offline LocalStorage backing
+    console.warn('[DB] Backend proxy delete post failed, removing directly from GitHub...');
+    this.removePostFromLocalCaches(postId);
+
+    const db = await this.getGitHubDatabase();
+    if (db) {
+      if (db.posts) {
+        db.posts = db.posts.filter((p: any) => p.id !== postId);
+      }
+      if (db.comments) {
+        db.comments = db.comments.filter((c: any) => c.post_id !== postId);
+      }
+      await this.commitDbToGitHub(db);
+    }
+  }
+
+  private removePostFromLocalCaches(postId: string) {
     const local = localStorage.getItem('SUGULE_LOCAL_POSTS');
     if (local) {
       try {
         const posts = JSON.parse(local) as Post[];
         const filtered = posts.filter(p => p.id !== postId);
         localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(filtered));
-      } catch {
-        // Ignore
-      }
+      } catch { /* ignore */ }
     }
 
     const favs = localStorage.getItem('SUGULE_FAVORITES');
@@ -874,9 +1011,7 @@ class SuguleDatabaseManager {
         const favorites = JSON.parse(favs) as string[];
         const filtered = favorites.filter(id => id !== postId);
         localStorage.setItem('SUGULE_FAVORITES', JSON.stringify(filtered));
-      } catch {
-        // Ignore
-      }
+      } catch { /* ignore */ }
     }
   }
 

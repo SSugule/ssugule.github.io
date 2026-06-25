@@ -181,8 +181,15 @@ export default function App() {
   const [isPremium, setIsPremium] = useState(() => localStorage.getItem('sugule_is_premium') === 'true');
   const [showSigninDialog, setShowSigninDialog] = useState(false);
   const [showSignupDialog, setShowSignupDialog] = useState(false);
-  const [isSignedUp, setIsSignedUp] = useState(() => localStorage.getItem('sugule_username') !== null);
-  const [username, setUsername] = useState(() => localStorage.getItem('sugule_username') || '');
+  const [isSignedUp, setIsSignedUp] = useState(() => {
+    const u = localStorage.getItem('sugule_username');
+    return u !== null && u !== 'null' && u !== 'undefined' && u !== 'Guest' && u !== 'guest' && u.trim() !== '';
+  });
+  const [username, setUsername] = useState(() => {
+    const u = localStorage.getItem('sugule_username');
+    if (u === 'null' || u === 'undefined' || u === 'Guest' || u === 'guest') return '';
+    return u || '';
+  });
   
   // Detail Modal view & Navigation
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
@@ -1646,7 +1653,7 @@ export default function App() {
       score: 1,
       elo: 1500,
       created_at: new Date().toISOString(),
-      uploader: 'Администратор',
+      uploader: username || 'Администратор',
       source_url: uploadSource.trim() || undefined,
       description: uploadDesc.trim() || '',
       tags: tagArray,
