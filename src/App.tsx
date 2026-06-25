@@ -45,7 +45,9 @@ import {
   Menu,
   TrendingUp,
   Flame,
-  ShieldCheck
+  ShieldCheck,
+  Terminal,
+  Bug
 } from 'lucide-react';
 import { Post, Tag, Comment, Playlist } from './types';
 import { dbManager } from './dbClient';
@@ -53,6 +55,72 @@ import { INITIAL_POSTS, INITIAL_TAGS } from './sampleData';
 import { motion } from 'motion/react';
 import { UserProfile } from './components/UserProfile';
 import { GamesView } from './components/GamesView';
+
+// Global log tracking mechanism for the Admin Debug modal
+export interface CapturedLog {
+  type: 'log' | 'warn' | 'error' | 'system';
+  text: string;
+  timestamp: string;
+}
+
+export const capturedLogs: CapturedLog[] = [];
+let isConsoleOverridden = false;
+
+function addCapturedLog(type: 'log' | 'warn' | 'error' | 'system', ...args: any[]) {
+  const text = args.map(arg => {
+    if (arg instanceof Error) {
+      return `${arg.name}: ${arg.message}\nStack:\n${arg.stack || ''}`;
+    }
+    if (typeof arg === 'object' && arg !== null) {
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }
+    return String(arg);
+  }).join(' ');
+
+  const now = new Date();
+  const timestamp = now.toLocaleTimeString() + '.' + String(now.getMilliseconds()).padStart(3, '0');
+  capturedLogs.push({ type, text, timestamp });
+  
+  if (capturedLogs.length > 1000) {
+    capturedLogs.shift();
+  }
+}
+
+if (typeof window !== 'undefined' && !isConsoleOverridden) {
+  isConsoleOverridden = true;
+  
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+
+  console.log = (...args) => {
+    addCapturedLog('log', ...args);
+    originalLog(...args);
+  };
+  console.warn = (...args) => {
+    addCapturedLog('warn', ...args);
+    originalWarn(...args);
+  };
+  console.error = (...args) => {
+    addCapturedLog('error', ...args);
+    originalError(...args);
+  };
+
+  window.addEventListener('error', (event) => {
+    addCapturedLog('error', `Global Unhandled Error: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`);
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    addCapturedLog('error', `Global Unhandled Promise Rejection: ${event.reason?.message || event.reason}`);
+  });
+  
+  addCapturedLog('system', 'Sugule Debug Catcher initialized.');
+  addCapturedLog('system', `Browser Locale: ${navigator.language}, Host: ${window.location.host}`);
+}
 
 // Helper to determine if a URL represents a video file
 const isUrlVideo = (url: string) => {
@@ -181,6 +249,7 @@ export default function App() {
   const [isPremium, setIsPremium] = useState(() => localStorage.getItem('sugule_is_premium') === 'true');
   const [showSigninDialog, setShowSigninDialog] = useState(false);
   const [showSignupDialog, setShowSignupDialog] = useState(false);
+  const [showDebugModal, setShowDebugModal] = useState(false);
   const [isSignedUp, setIsSignedUp] = useState(() => {
     const u = localStorage.getItem('sugule_username');
     return u !== null && u !== 'null' && u !== 'undefined' && u !== 'Guest' && u !== 'guest' && u.trim() !== '';
@@ -4439,6 +4508,260 @@ export default function App() {
           </div>
 
         </div>
+      )}
+
+      {/* EXCLUSIVE ADMIN DEBUGGER COMPONENT */}
+      {username.trim().toLowerCase() === 'admin' && (
+        <>
+          {/* Debug trigger button floating in bottom-right corner */}
+          <button
+            id="admin-debug-trigger"
+            onClick={() => setShowDebugModal(true)}
+            className="fixed bottom-4 right-4 z-[9999] flex items-center gap-1.5 px-3 py-2 bg-purple-700 hover:bg-purple-600 active:bg-purple-800 text-white rounded-full shadow-lg border border-purple-500 transition-all font-mono font-bold text-xs cursor-pointer group"
+            title="Панель отладки и логов"
+          >
+            <Terminal className="w-3.5 h-3.5 animate-pulse text-yellow-300" />
+            <span>Debug</span>
+            <Bug className="w-3.5 h-3.5 group-hover:rotate-12 transition-transform text-purple-200" />
+          </button>
+
+          {/* Debug Modal overlay */}
+          {showDebugModal && (
+            <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs font-mono">
+              <div 
+                className="w-full max-w-2xl bg-[#0e1014] border border-zinc-800 rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Bug className="w-5 h-5 text-purple-400" />
+                    <span className="font-bold text-sm text-zinc-100">Sugule Debugger & Diagnostics</span>
+                  </div>
+                  <button 
+                    onClick={() => setShowDebugModal(false)}
+                    className="p-1 text-zinc-400 hover:text-zinc-200 transition rounded hover:bg-zinc-800"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Main Body */}
+                <div className="p-4 flex-1 overflow-y-auto space-y-4 text-xs text-zinc-300">
+                  {/* Status Grid */}
+                  <div className="grid grid-cols-2 gap-2 bg-[#090a0d] p-3 rounded border border-zinc-850">
+                    <div>
+                      <span className="text-zinc-500">Пользователь:</span> <strong className="text-purple-400">{username}</strong>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">GitHub Token:</span>{' '}
+                      <strong className={localStorage.getItem('SUGULE_GITHUB_TOKEN') ? "text-emerald-400" : "text-rose-400"}>
+                        {localStorage.getItem('SUGULE_GITHUB_TOKEN') ? 'Настроен' : 'Отсутствует'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">Специфика среды:</span>{' '}
+                      <span className="text-zinc-300">
+                        {window.location.hostname.endsWith('github.io') ? 'GitHub Pages' : 'Разработка/Cloud Run'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">Локальный кэш постов:</span>{' '}
+                      <span className="text-zinc-300">
+                        {(() => {
+                          try {
+                            const postsStr = localStorage.getItem('SUGULE_LOCAL_POSTS');
+                            return postsStr ? `${JSON.parse(postsStr).length} шт.` : 'Пусто';
+                          } catch {
+                            return 'Ошибка чтения';
+                          }
+                        })()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Logs list visualizer */}
+                  <div className="space-y-1">
+                    <span className="text-zinc-400 font-bold block mb-1">Поток событий и логов (последние 1000):</span>
+                    <div className="h-44 overflow-y-auto bg-black p-2.5 rounded border border-zinc-850 font-mono text-[11px] leading-relaxed space-y-1 select-text">
+                      {capturedLogs.length === 0 ? (
+                        <div className="text-zinc-500 italic text-center py-4">Логи отсутствуют в этой сессии...</div>
+                      ) : (
+                        capturedLogs.map((log, i) => (
+                          <div key={i} className="whitespace-pre-wrap break-all border-b border-zinc-950/40 pb-0.5 last:border-0">
+                            <span className="text-zinc-600">[{log.timestamp}]</span>{' '}
+                            {log.type === 'error' && (
+                              <span className="text-rose-400 font-semibold">[ERROR] {log.text}</span>
+                            )}
+                            {log.type === 'warn' && (
+                              <span className="text-amber-400 font-semibold">[WARN] {log.text}</span>
+                            )}
+                            {log.type === 'system' && (
+                              <span className="text-purple-400 font-semibold">[SYSTEM] {log.text}</span>
+                            )}
+                            {log.type === 'log' && (
+                              <span className="text-zinc-300">[INFO] {log.text}</span>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Complete copyable dump */}
+                  <div className="space-y-1">
+                    <span className="text-zinc-400 font-bold block">Полный диагностический дамп (для копирования):</span>
+                    <textarea
+                      readOnly
+                      className="w-full h-32 bg-zinc-950 border border-zinc-850 rounded p-2 text-[10px] text-zinc-400 focus:outline-none focus:border-purple-900 font-mono resize-none selection:bg-purple-900 selection:text-white"
+                      value={(() => {
+                        const owner = localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule';
+                        const repo = localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io';
+                        const branch = localStorage.getItem('SUGULE_GITHUB_BRANCH') || 'main';
+                        const token = localStorage.getItem('SUGULE_GITHUB_TOKEN') || '';
+                        
+                        let postsCount = 0;
+                        try {
+                          postsCount = JSON.parse(localStorage.getItem('SUGULE_LOCAL_POSTS') || '[]').length;
+                        } catch {}
+                        
+                        let tagsCount = 0;
+                        try {
+                          tagsCount = JSON.parse(localStorage.getItem('SUGULE_LOCAL_TAGS') || '[]').length;
+                        } catch {}
+
+                        let usersCount = 0;
+                        try {
+                          usersCount = JSON.parse(localStorage.getItem('SUGULE_LOCAL_USERS') || '[]').length;
+                        } catch {}
+
+                        let favoritesCount = 0;
+                        try {
+                          favoritesCount = JSON.parse(localStorage.getItem('SUGULE_FAVORITES') || '[]').length;
+                        } catch {}
+
+                        const lines = [
+                          `=========================================`,
+                          `SUGULE DATABASE DEBUG LOGS & DIAGNOSTICS`,
+                          `=========================================`,
+                          `Generated: ${new Date().toISOString()}`,
+                          `Current Local Time: ${new Date().toLocaleString()}`,
+                          `Active User: ${username || 'Anonymous/Guest'}`,
+                          `Url: ${window.location.href}`,
+                          `User Agent: ${navigator.userAgent}`,
+                          ``,
+                          `--- GITHUB INTEGRATION CONFIG ---`,
+                          `Owner: ${owner}`,
+                          `Repo: ${repo}`,
+                          `Branch: ${branch}`,
+                          `Token Present: ${token ? `YES (Length: ${token.length}, Starts with: ${token.slice(0, 4)}...)` : 'NO'}`,
+                          ``,
+                          `--- LOCAL STORAGE STATS ---`,
+                          `SUGULE_LOCAL_POSTS: ${postsCount} records`,
+                          `SUGULE_LOCAL_TAGS: ${tagsCount} records`,
+                          `SUGULE_LOCAL_USERS: ${usersCount} records`,
+                          `SUGULE_FAVORITES: ${favoritesCount} records`,
+                          ``,
+                          `--- CHRONOLOGICAL EVENT LOGS ---`,
+                          ...capturedLogs.map(l => `[${l.timestamp}] [${l.type.toUpperCase()}] ${l.text}`),
+                          `=========================================`,
+                        ];
+                        return lines.join('\n');
+                      })()}
+                    />
+                  </div>
+                </div>
+
+                {/* Footer Controls */}
+                <div className="bg-zinc-900 border-t border-zinc-800 px-4 py-3 flex items-center justify-between">
+                  <button
+                    onClick={() => {
+                      capturedLogs.length = 0;
+                      addCapturedLog('system', 'Logs manually cleared by administrator.');
+                      setShowDebugModal(false);
+                      setTimeout(() => setShowDebugModal(true), 50);
+                    }}
+                    className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-[11px] font-bold border border-zinc-700 transition"
+                  >
+                    Очистить логи
+                  </button>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        const owner = localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule';
+                        const repo = localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io';
+                        const branch = localStorage.getItem('SUGULE_GITHUB_BRANCH') || 'main';
+                        const token = localStorage.getItem('SUGULE_GITHUB_TOKEN') || '';
+                        
+                        let postsCount = 0;
+                        try {
+                          postsCount = JSON.parse(localStorage.getItem('SUGULE_LOCAL_POSTS') || '[]').length;
+                        } catch {}
+                        
+                        let tagsCount = 0;
+                        try {
+                          tagsCount = JSON.parse(localStorage.getItem('SUGULE_LOCAL_TAGS') || '[]').length;
+                        } catch {}
+
+                        let usersCount = 0;
+                        try {
+                          usersCount = JSON.parse(localStorage.getItem('SUGULE_LOCAL_USERS') || '[]').length;
+                        } catch {}
+
+                        let favoritesCount = 0;
+                        try {
+                          favoritesCount = JSON.parse(localStorage.getItem('SUGULE_FAVORITES') || '[]').length;
+                        } catch {}
+
+                        const fullDump = [
+                          `=========================================`,
+                          `SUGULE DATABASE DEBUG LOGS & DIAGNOSTICS`,
+                          `=========================================`,
+                          `Generated: ${new Date().toISOString()}`,
+                          `Current Local Time: ${new Date().toLocaleString()}`,
+                          `Active User: ${username || 'Anonymous/Guest'}`,
+                          `Url: ${window.location.href}`,
+                          `User Agent: ${navigator.userAgent}`,
+                          ``,
+                          `--- GITHUB INTEGRATION CONFIG ---`,
+                          `Owner: ${owner}`,
+                          `Repo: ${repo}`,
+                          `Branch: ${branch}`,
+                          `Token Present: ${token ? `YES (Length: ${token.length}, Starts with: ${token.slice(0, 4)}...)` : 'NO'}`,
+                          ``,
+                          `--- LOCAL STORAGE STATS ---`,
+                          `SUGULE_LOCAL_POSTS: ${postsCount} records`,
+                          `SUGULE_LOCAL_TAGS: ${tagsCount} records`,
+                          `SUGULE_LOCAL_USERS: ${usersCount} records`,
+                          `SUGULE_FAVORITES: ${favoritesCount} records`,
+                          ``,
+                          `--- CHRONOLOGICAL EVENT LOGS ---`,
+                          ...capturedLogs.map(l => `[${l.timestamp}] [${l.type.toUpperCase()}] ${l.text}`),
+                          `=========================================`,
+                        ].join('\n');
+
+                        navigator.clipboard.writeText(fullDump);
+                        alert('Логи успешно скопированы в буфер обмена!');
+                      }}
+                      className="px-3.5 py-1.5 bg-purple-700 hover:bg-purple-600 text-white rounded text-[11px] font-bold border border-purple-500 transition flex items-center gap-1.5"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Копировать все логи
+                    </button>
+                    
+                    <button
+                      onClick={() => setShowDebugModal(false)}
+                      className="px-3.5 py-1.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 rounded text-[11px] font-bold border border-zinc-700 transition"
+                    >
+                      Закрыть
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
     </div>
