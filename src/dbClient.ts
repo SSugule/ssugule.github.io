@@ -1,6 +1,50 @@
 import { Post, Tag, Comment } from './types';
 import { INITIAL_POSTS, INITIAL_TAGS, INITIAL_COMMENTS } from './sampleData';
 
+class OfflineMediaStore {
+  private dbPromise: Promise<IDBDatabase> | null = null;
+
+  private getDB(): Promise<IDBDatabase> {
+    if (this.dbPromise) return this.dbPromise;
+    this.dbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open('SuguleOfflineMediaDB', 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('media')) {
+          db.createObjectStore('media');
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return this.dbPromise;
+  }
+
+  public async saveMedia(key: string, file: Blob): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('media', 'readwrite');
+      const store = transaction.objectStore('media');
+      const request = store.put(file, key);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  public async getMedia(key: string): Promise<Blob | null> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('media', 'readonly');
+      const store = transaction.objectStore('media');
+      const request = store.get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+  }
+}
+
+export const offlineMediaStore = new OfflineMediaStore();
+
 class SuguleDatabaseManager {
   private isGitEnabled: boolean = true;
   private configUrl: string = 'LOCAL_WORKSPACE_JSON';
@@ -147,6 +191,94 @@ class SuguleDatabaseManager {
     });
 
     localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(posts));
+  }
+
+  public async resolvePostOfflineUrls(post: Post): Promise<Post> {
+    const updated = { ...post };
+    
+    if (updated.cover_url && updated.cover_url.startsWith('offline_media:')) {
+      try {
+        const blob = await offlineMediaStore.getMedia(updated.cover_url);
+        if (blob) {
+          updated.cover_url = URL.createObjectURL(blob);
+        }
+      } catch (err) {
+        console.warn('Failed to resolve offline cover_url:', err);
+      }
+    }
+
+    if (updated.url) {
+      if (updated.url.startsWith('offline_media:')) {
+        try {
+          const blob = await offlineMediaStore.getMedia(updated.url);
+          if (blob) {
+            updated.url = URL.createObjectURL(blob);
+          }
+        } catch (err) {
+          console.warn('Failed to resolve offline url:', err);
+        }
+      } else if (updated.url.trim().startsWith('[') && updated.url.trim().endsWith(']')) {
+        try {
+          const pages = JSON.parse(updated.url) as string[];
+          const resolvedPages = await Promise.all(
+            pages.map(async (page) => {
+              if (page.startsWith('offline_media:')) {
+                const blob = await offlineMediaStore.getMedia(page);
+                if (blob) {
+                  return URL.createObjectURL(blob);
+                }
+              }
+              return page;
+            })
+          );
+          updated.url = JSON.stringify(resolvedPages);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (updated.screenshots && Array.isArray(updated.screenshots)) {
+      try {
+        updated.screenshots = await Promise.all(
+          updated.screenshots.map(async (scr) => {
+            if (scr.startsWith('offline_media:')) {
+              const blob = await offlineMediaStore.getMedia(scr);
+              if (blob) {
+                return URL.createObjectURL(blob);
+              }
+            }
+            return scr;
+          })
+        );
+      } catch (err) {
+        console.warn('Failed to resolve offline screenshots:', err);
+      }
+    }
+
+    return updated;
+  }
+
+  public async resolvePostsOfflineUrls(posts: Post[]): Promise<Post[]> {
+    return Promise.all(posts.map(p => this.resolvePostOfflineUrls(p)));
+  }
+
+  private async saveToIndexedDBFallback(file: File, onProgress?: (status: string, percentage?: number) => void): Promise<string> {
+    try {
+      if (onProgress) onProgress('Сохранение файла в оффлайн-хранилище браузера (IndexedDB)...', 80);
+      const fileExt = file.name.split('.').pop() || 'png';
+      const randomId = Math.random().toString(36).substring(2, 11);
+      const offlineKey = `offline_media:${Date.now()}_${randomId}.${fileExt}`;
+      
+      await offlineMediaStore.saveMedia(offlineKey, file);
+      
+      if (onProgress) onProgress('Успешно сохранено локально!', 100);
+      console.log('[DB] File successfully saved in offline IndexedDB store with key:', offlineKey);
+      return offlineKey;
+    } catch (dbErr: any) {
+      console.error('[DB] Failed to save file in IndexedDB fallback:', dbErr);
+      throw new Error(`Ошибка локального сохранения: ${dbErr.message || 'IndexedDB error'}`);
+    }
   }
 
   private getGitHubSettings() {
@@ -303,11 +435,30 @@ class SuguleDatabaseManager {
   }
 
   // --- ARTIFACT FILE UPLOAD (PROXIED TO NODE BACKEND) ---
+  // --- ARTIFACT FILE UPLOAD (PROXIED TO NODE BACKEND OR INDEXEDDB OFFLINE FALLBACK) ---
   public async uploadFile(file: File, onProgress?: (status: string, percentage?: number) => void): Promise<string> {
     const { token } = this.getGitHubSettings();
-    
-    // If we have a GitHub token, we ALWAYS upload directly to GitHub so that the file is persisted
-    // into the repository's 'media/' directory. This solves the user's issue with missing media files in GitHub.
+    const isStaticEnv = window.location.hostname.endsWith('github.io') || window.location.protocol === 'file:';
+
+    // If we are in a static hosting environment (like GitHub Pages), local proxy backend is unavailable.
+    // Try GitHub direct upload immediately, or go straight to IndexedDB fallback.
+    if (isStaticEnv) {
+      if (token) {
+        try {
+          console.log('[DB] Static Env: Uploading file directly to GitHub using token...');
+          return await this.uploadFileToGitHub(file, onProgress);
+        } catch (gitErr: any) {
+          console.warn('[DB] GitHub upload failed in static environment, falling back to local IndexedDB store:', gitErr);
+        }
+      } else {
+        console.warn('[DB] No GitHub token configured in static environment. Storing file in local IndexedDB...');
+      }
+      return await this.saveToIndexedDBFallback(file, onProgress);
+    }
+
+    // Otherwise, we are in a backend-enabled container environment. First try direct GitHub upload if token exists
+    // (so we save directly to media/ on main branch), then fall back to Express backend upload,
+    // and finally fall back to IndexedDB if both fail.
     if (token) {
       try {
         console.log('[DB] Uploading file directly to GitHub using token...');
@@ -424,7 +575,7 @@ class SuguleDatabaseManager {
       }
 
       // --- SINGLE-SHOT UPLOAD WITH XHR TO GET DETAILED PROGRESS ---
-      return new Promise<string>((resolve, reject) => {
+      return await new Promise<string>((resolve, reject) => {
         const randomId = Math.random().toString(36).substring(2, 11);
         const fileName = `${Date.now()}_${randomId}.${fileExt}`;
         
@@ -480,12 +631,15 @@ class SuguleDatabaseManager {
         }
       });
     } catch (apiError: any) {
-      // Direct robust fallback to direct GitHub upload when local Express API is not reachable or throws
+      console.warn('Express upload failed, fallback to direct GitHub or IndexedDB upload:', apiError);
       if (token) {
-        console.warn('Local file upload failed, fallback to direct GitHub upload:', apiError);
-        return this.uploadFileToGitHub(file, onProgress);
+        try {
+          return await this.uploadFileToGitHub(file, onProgress);
+        } catch (gitErr: any) {
+          console.warn('Direct GitHub fallback upload also failed. Using IndexedDB...', gitErr);
+        }
       }
-      throw apiError;
+      return await this.saveToIndexedDBFallback(file, onProgress);
     }
   }
 
@@ -567,6 +721,7 @@ class SuguleDatabaseManager {
   
   public async getPosts(): Promise<Post[]> {
     const initialPostIds = new Set(INITIAL_POSTS.map(p => p.id));
+    let rawPostsToReturn: Post[] = [];
 
     // 1. Try to load the database directly from the GitHub repository
     try {
@@ -581,65 +736,75 @@ class SuguleDatabaseManager {
             localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
             const extractedTags = this.extractTagsFromPosts(customPosts);
             localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
-            return customPosts;
+            rawPostsToReturn = customPosts;
           } else {
             console.log(`[SuguleDb] Successfully loaded standard posts directly from GitHub.`);
             localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(parsedPosts));
             const extractedTags = this.extractTagsFromPosts(parsedPosts);
             localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
-            return parsedPosts;
+            rawPostsToReturn = parsedPosts;
           }
         } else {
           // Connected to GitHub but contains 0 posts -> return standard posts only
           console.log('[SuguleDb] GitHub repository contains 0 posts. Showing standard posts.');
           localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(INITIAL_POSTS));
           localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(INITIAL_TAGS));
-          return INITIAL_POSTS;
+          rawPostsToReturn = INITIAL_POSTS;
         }
       }
     } catch (gitErr) {
       console.warn('[SuguleDb] Failed to fetch posts from GitHub, trying local server/cache:', gitErr);
     }
 
-    // 2. If GitHub fetch failed or was unavailable, fall back to local server endpoint
-    try {
-      const response = await fetch('/api/posts');
-      if (response.ok) {
-        const posts = await response.json() as Post[];
-        if (posts && Array.isArray(posts) && posts.length > 0) {
-          const customPosts = posts.filter(p => p && p.id && !initialPostIds.has(p.id));
-          if (customPosts.length > 0) {
-            localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
-            const extractedTags = this.extractTagsFromPosts(customPosts);
-            localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
-            return customPosts;
-          } else {
-            localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(posts));
-            const extractedTags = this.extractTagsFromPosts(posts);
-            localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
-            return posts;
+    if (rawPostsToReturn.length === 0) {
+      // 2. If GitHub fetch failed or was unavailable, fall back to local server endpoint
+      try {
+        const response = await fetch('/api/posts');
+        if (response.ok) {
+          const posts = await response.json() as Post[];
+          if (posts && Array.isArray(posts) && posts.length > 0) {
+            const customPosts = posts.filter(p => p && p.id && !initialPostIds.has(p.id));
+            if (customPosts.length > 0) {
+              localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
+              const extractedTags = this.extractTagsFromPosts(customPosts);
+              localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
+              rawPostsToReturn = customPosts;
+            } else {
+              localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(posts));
+              const extractedTags = this.extractTagsFromPosts(posts);
+              localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
+              rawPostsToReturn = posts;
+            }
           }
         }
+      } catch (e) {
+        console.warn('Backend proxy fetch posts failed, loading from offline cache:', e);
       }
-    } catch (e) {
-      console.warn('Backend proxy fetch posts failed, loading from offline cache:', e);
     }
 
-    // 3. Absolute cache fallback
-    const local = localStorage.getItem('SUGULE_LOCAL_POSTS');
-    if (local) {
-      try {
-        const parsed = JSON.parse(local) as Post[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const customPosts = parsed.filter(p => p && p.id && !initialPostIds.has(p.id));
-          if (customPosts.length > 0) {
-            return customPosts;
+    if (rawPostsToReturn.length === 0) {
+      // 3. Absolute cache fallback
+      const local = localStorage.getItem('SUGULE_LOCAL_POSTS');
+      if (local) {
+        try {
+          const parsed = JSON.parse(local) as Post[];
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const customPosts = parsed.filter(p => p && p.id && !initialPostIds.has(p.id));
+            if (customPosts.length > 0) {
+              rawPostsToReturn = customPosts;
+            } else {
+              rawPostsToReturn = parsed;
+            }
           }
-          return parsed;
-        }
-      } catch { /* continue */ }
+        } catch { /* continue */ }
+      }
     }
-    return INITIAL_POSTS;
+
+    if (rawPostsToReturn.length === 0) {
+      rawPostsToReturn = INITIAL_POSTS;
+    }
+
+    return await this.resolvePostsOfflineUrls(rawPostsToReturn);
   }
 
   public async getTags(): Promise<Tag[]> {
@@ -726,6 +891,11 @@ class SuguleDatabaseManager {
       elo: post.elo || 1500
     };
 
+    // ALWAYS write to local storage unconditionally to guarantee instantaneous responsive updates
+    // and fail-safe offline backup, even if GitHub direct commits or backend API calls fail.
+    this.addPostToLocal(postToInsert as Post);
+    this.ensureTagsExistLocally(post.tags || []);
+
     let apiSucceeded = false;
     try {
       const response = await fetch('/api/posts', {
@@ -734,8 +904,6 @@ class SuguleDatabaseManager {
         body: JSON.stringify(postToInsert)
       });
       if (response.ok) {
-        const inserted = await response.json() as Post;
-        this.addPostToLocal(inserted);
         apiSucceeded = true;
       }
     } catch (e) {
@@ -774,13 +942,7 @@ class SuguleDatabaseManager {
       }
     }
 
-    if (!apiSucceeded && !token) {
-      console.warn('[DB] Backend proxy create post failed and no GitHub token, saving in local offline backup:');
-      this.addPostToLocal(postToInsert as Post);
-      this.ensureTagsExistLocally(post.tags || []);
-    }
-
-    return postToInsert as Post;
+    return await this.resolvePostOfflineUrls(postToInsert as Post);
   }
 
   public async createComment(comment: Comment): Promise<Comment> {
@@ -1040,13 +1202,15 @@ class SuguleDatabaseManager {
   }
 
   public async deletePost(postId: string): Promise<void> {
+    // ALWAYS remove from local cache immediately so the UI is updated responsively and stays offline-synced.
+    this.removePostFromLocalCaches(postId);
+
     let apiSucceeded = false;
     try {
       const response = await fetch(`/api/posts/${postId}`, {
         method: 'DELETE'
       });
       if (response.ok) {
-        this.removePostFromLocalCaches(postId);
         apiSucceeded = true;
       }
     } catch (e) {
@@ -1070,10 +1234,6 @@ class SuguleDatabaseManager {
       } catch (err) {
         console.warn('[DB] Failed to commit post deletion to GitHub:', err);
       }
-    }
-
-    if (!apiSucceeded && !token) {
-      this.removePostFromLocalCaches(postId);
     }
   }
 
