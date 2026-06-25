@@ -115,7 +115,12 @@ if (typeof window !== 'undefined' && !isConsoleOverridden) {
   });
 
   window.addEventListener('unhandledrejection', (event) => {
-    addCapturedLog('error', `Global Unhandled Promise Rejection: ${event.reason?.message || event.reason}`);
+    const reason = event.reason?.message || event.reason || '';
+    const reasonStr = typeof reason === 'string' ? reason : String(reason);
+    if (reasonStr.includes('WebSocket') || reasonStr.includes('websocket') || reasonStr.includes('vite') || reasonStr.includes('HMR')) {
+      return; // Ignore benign Vite dev HMR errors
+    }
+    addCapturedLog('error', `Global Unhandled Promise Rejection: ${reasonStr}`);
   });
   
   addCapturedLog('system', 'Sugule Debug Catcher initialized.');

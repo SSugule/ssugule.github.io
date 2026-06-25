@@ -281,6 +281,10 @@ class SuguleDatabaseManager {
     }
   }
 
+  private isStaticEnv(): boolean {
+    return window.location.hostname.endsWith('github.io') || window.location.protocol === 'file:';
+  }
+
   private getGitHubSettings() {
     const owner = localStorage.getItem('SUGULE_GITHUB_OWNER') || 'ssugule';
     const repo = localStorage.getItem('SUGULE_GITHUB_REPO') || 'ssugule.github.io';
@@ -301,8 +305,8 @@ class SuguleDatabaseManager {
     const { owner, repo, branch } = this.getGitHubSettings();
     
     const urls = [
-      `./database.json`,
       `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/database.json`,
+      `./database.json`,
       `/${repo}/database.json`,
       `/database.json`
     ];
@@ -774,7 +778,6 @@ class SuguleDatabaseManager {
   }
   
   public async getPosts(): Promise<Post[]> {
-    const initialPostIds = new Set(INITIAL_POSTS.map(p => p.id));
     let rawPostsToReturn: Post[] = [];
 
     // 1. Try to load the database directly from the GitHub repository
@@ -784,20 +787,11 @@ class SuguleDatabaseManager {
         const parsedPosts = this.parseGithubPosts(githubDb.posts);
         
         if (parsedPosts.length > 0) {
-          const customPosts = parsedPosts.filter(p => p && p.id && !initialPostIds.has(p.id));
-          if (customPosts.length > 0) {
-            console.log(`[SuguleDb] Loaded ${customPosts.length} custom posts from GitHub (standard posts hidden).`);
-            localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
-            const extractedTags = this.extractTagsFromPosts(customPosts);
-            localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
-            rawPostsToReturn = customPosts;
-          } else {
-            console.log(`[SuguleDb] Successfully loaded standard posts directly from GitHub.`);
-            localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(parsedPosts));
-            const extractedTags = this.extractTagsFromPosts(parsedPosts);
-            localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
-            rawPostsToReturn = parsedPosts;
-          }
+          console.log(`[SuguleDb] Loaded ${parsedPosts.length} posts directly from GitHub.`);
+          localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(parsedPosts));
+          const extractedTags = this.extractTagsFromPosts(parsedPosts);
+          localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
+          rawPostsToReturn = parsedPosts;
         } else {
           // Connected to GitHub but contains 0 posts -> return standard posts only
           console.log('[SuguleDb] GitHub repository contains 0 posts. Showing standard posts.');
@@ -811,28 +805,22 @@ class SuguleDatabaseManager {
     }
 
     if (rawPostsToReturn.length === 0) {
-      // 2. If GitHub fetch failed or was unavailable, fall back to local server endpoint
-      try {
-        const response = await fetch('/api/posts');
-        if (response.ok) {
-          const posts = await response.json() as Post[];
-          if (posts && Array.isArray(posts) && posts.length > 0) {
-            const customPosts = posts.filter(p => p && p.id && !initialPostIds.has(p.id));
-            if (customPosts.length > 0) {
-              localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(customPosts));
-              const extractedTags = this.extractTagsFromPosts(customPosts);
-              localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
-              rawPostsToReturn = customPosts;
-            } else {
+      // 2. If GitHub fetch failed or was unavailable, and we are not in static environment, try local server endpoint
+      if (!this.isStaticEnv()) {
+        try {
+          const response = await fetch('/api/posts');
+          if (response.ok) {
+            const posts = await response.json() as Post[];
+            if (posts && Array.isArray(posts) && posts.length > 0) {
               localStorage.setItem('SUGULE_LOCAL_POSTS', JSON.stringify(posts));
               const extractedTags = this.extractTagsFromPosts(posts);
               localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(extractedTags));
               rawPostsToReturn = posts;
             }
           }
+        } catch (e) {
+          console.warn('Backend proxy fetch posts failed, loading from offline cache:', e);
         }
-      } catch (e) {
-        console.warn('Backend proxy fetch posts failed, loading from offline cache:', e);
       }
     }
 
@@ -843,12 +831,7 @@ class SuguleDatabaseManager {
         try {
           const parsed = JSON.parse(local) as Post[];
           if (Array.isArray(parsed) && parsed.length > 0) {
-            const customPosts = parsed.filter(p => p && p.id && !initialPostIds.has(p.id));
-            if (customPosts.length > 0) {
-              rawPostsToReturn = customPosts;
-            } else {
-              rawPostsToReturn = parsed;
-            }
+            rawPostsToReturn = parsed;
           }
         } catch { /* continue */ }
       }
@@ -884,6 +867,10 @@ class SuguleDatabaseManager {
       console.warn('[SuguleDb] Failed to fetch tags from GitHub database:', gitErr);
     }
 
+    if (this.isStaticEnv()) {
+      return INITIAL_TAGS;
+    }
+
     try {
       const response = await fetch('/api/tags');
       if (!response.ok) throw new Error('API error');
@@ -917,6 +904,11 @@ class SuguleDatabaseManager {
       }
     } catch (gitErr) {
       console.warn('[SuguleDb] Failed to fetch comments from GitHub database:', gitErr);
+    }
+
+    if (this.isStaticEnv()) {
+      const localComments = this.getLocalCommentsList();
+      return localComments.filter(c => c.post_id === postId);
     }
 
     // 2. Fall back to local server API
@@ -981,17 +973,19 @@ class SuguleDatabaseManager {
     this.ensureTagsExistLocally(post.tags || []);
 
     let apiSucceeded = false;
-    try {
-      const response = await fetch('/api/posts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(postToInsert)
-      });
-      if (response.ok) {
-        apiSucceeded = true;
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch('/api/posts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(postToInsert)
+        });
+        if (response.ok) {
+          apiSucceeded = true;
+        }
+      } catch (e) {
+        // Proceed to dual-mode / fallback
       }
-    } catch (e) {
-      // Proceed to dual-mode / fallback
     }
 
     const { token } = this.getGitHubSettings();
@@ -1031,19 +1025,21 @@ class SuguleDatabaseManager {
 
   public async createComment(comment: Comment): Promise<Comment> {
     let apiSucceeded = false;
-    try {
-      const response = await fetch('/api/comments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(comment)
-      });
-      if (response.ok) {
-        const inserted = await response.json() as Comment;
-        this.addCommentToLocal(inserted);
-        apiSucceeded = true;
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch('/api/comments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(comment)
+        });
+        if (response.ok) {
+          const inserted = await response.json() as Comment;
+          this.addCommentToLocal(inserted);
+          apiSucceeded = true;
+        }
+      } catch (e) {
+        // Proceed to dual-mode / fallback
       }
-    } catch (e) {
-      // Proceed to dual-mode / fallback
     }
 
     const { token } = this.getGitHubSettings();
@@ -1070,20 +1066,22 @@ class SuguleDatabaseManager {
   public async votePost(postId: string, scoreDelta: number): Promise<number> {
     let apiSucceeded = false;
     let apiScore = 0;
-    try {
-      const response = await fetch(`/api/posts/${postId}/vote`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scoreDelta })
-      });
-      if (response.ok) {
-        const { score } = await response.json();
-        this.updatePostScoreLocally(postId, score);
-        apiScore = score;
-        apiSucceeded = true;
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch(`/api/posts/${postId}/vote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scoreDelta })
+        });
+        if (response.ok) {
+          const { score } = await response.json();
+          this.updatePostScoreLocally(postId, score);
+          apiScore = score;
+          apiSucceeded = true;
+        }
+      } catch (e) {
+        // Proceed to fallback / dual
       }
-    } catch (e) {
-      // Proceed to fallback / dual
     }
 
     const { token } = this.getGitHubSettings();
@@ -1114,18 +1112,20 @@ class SuguleDatabaseManager {
 
   public async updatePostTags(postId: string, tags: string[]): Promise<void> {
     let apiSucceeded = false;
-    try {
-      const response = await fetch(`/api/posts/${postId}/tags`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tags })
-      });
-      if (response.ok) {
-        this.updatePostTagsLocally(postId, tags);
-        apiSucceeded = true;
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch(`/api/posts/${postId}/tags`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tags })
+        });
+        if (response.ok) {
+          this.updatePostTagsLocally(postId, tags);
+          apiSucceeded = true;
+        }
+      } catch (e) {
+        // Proceed to fallback / dual
       }
-    } catch (e) {
-      // Proceed to fallback / dual
     }
 
     const { token } = this.getGitHubSettings();
@@ -1167,18 +1167,20 @@ class SuguleDatabaseManager {
 
   public async updatePost(postId: string, fields: Partial<Post>): Promise<void> {
     let apiSucceeded = false;
-    try {
-      const response = await fetch(`/api/posts/${postId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fields)
-      });
-      if (response.ok) {
-        this.updatePostLocally(postId, fields);
-        apiSucceeded = true;
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch(`/api/posts/${postId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(fields)
+        });
+        if (response.ok) {
+          this.updatePostLocally(postId, fields);
+          apiSucceeded = true;
+        }
+      } catch (e) {
+        // Proceed to fallback / dual
       }
-    } catch (e) {
-      // Proceed to fallback / dual
     }
 
     const { token } = this.getGitHubSettings();
@@ -1227,28 +1229,30 @@ class SuguleDatabaseManager {
     const tagObj: Tag = { name: cleanName, category, count: 1 };
 
     let apiSucceeded = false;
-    try {
-      const response = await fetch('/api/tags', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, category })
-      });
-      if (response.ok) {
-        const resObj = await response.json() as Tag;
-        
-        const local = localStorage.getItem('SUGULE_LOCAL_TAGS');
-        let tags = INITIAL_TAGS;
-        if (local) {
-          try { tags = JSON.parse(local); } catch { tags = INITIAL_TAGS; }
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch('/api/tags', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, category })
+        });
+        if (response.ok) {
+          const resObj = await response.json() as Tag;
+          
+          const local = localStorage.getItem('SUGULE_LOCAL_TAGS');
+          let tags = INITIAL_TAGS;
+          if (local) {
+            try { tags = JSON.parse(local); } catch { tags = INITIAL_TAGS; }
+          }
+          const filtered = tags.filter(t => t.name.toLowerCase() !== resObj.name.toLowerCase());
+          const updated = [...filtered, resObj];
+          localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(updated));
+          
+          apiSucceeded = true;
         }
-        const filtered = tags.filter(t => t.name.toLowerCase() !== resObj.name.toLowerCase());
-        const updated = [...filtered, resObj];
-        localStorage.setItem('SUGULE_LOCAL_TAGS', JSON.stringify(updated));
-        
-        apiSucceeded = true;
+      } catch (e) {
+        // Proceed to fallback / dual
       }
-    } catch (e) {
-      // Proceed to fallback / dual
     }
 
     const { token } = this.getGitHubSettings();
@@ -1290,15 +1294,17 @@ class SuguleDatabaseManager {
     this.removePostFromLocalCaches(postId);
 
     let apiSucceeded = false;
-    try {
-      const response = await fetch(`/api/posts/${postId}`, {
-        method: 'DELETE'
-      });
-      if (response.ok) {
-        apiSucceeded = true;
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch(`/api/posts/${postId}`, {
+          method: 'DELETE'
+        });
+        if (response.ok) {
+          apiSucceeded = true;
+        }
+      } catch (e) {
+        // Proceed to fallback / dual
       }
-    } catch (e) {
-      // Proceed to fallback / dual
     }
 
     const { token } = this.getGitHubSettings();
@@ -1387,36 +1393,39 @@ class SuguleDatabaseManager {
   public async loginUser(identifier: string, passport: string): Promise<any> {
     const cleanId = identifier.trim().toLowerCase();
     
-    // First try standard local proxy Express API
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password: passport })
-      });
-      if (response.ok) {
-        return await response.json();
-      } else {
-        try {
-          const err = await response.json();
-          throw new Error(err.error || 'Ошибка входа');
-        } catch (jsonErr: any) {
-          if (jsonErr.message && (jsonErr.message.includes('Unexpected token') || jsonErr.message.includes('JSON'))) {
-            throw new Error('NOT_JSON_RESPONSE');
+    // First try standard local proxy Express API if not in static env
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier, password: passport })
+        });
+        if (response.ok) {
+          return await response.json();
+        } else {
+          try {
+            const err = await response.json();
+            throw new Error(err.error || 'Ошибка входа');
+          } catch (jsonErr: any) {
+            if (jsonErr.message && (jsonErr.message.includes('Unexpected token') || jsonErr.message.includes('JSON'))) {
+              throw new Error('NOT_JSON_RESPONSE');
+            }
+            throw jsonErr;
           }
-          throw jsonErr;
+        }
+      } catch (e: any) {
+        const isHtmlResponse = e.message === 'NOT_JSON_RESPONSE' || e instanceof SyntaxError || e.message.includes('Unexpected token') || e.message.includes('JSON');
+        const isNetworkError = e.message === 'Failed to fetch' || e.message.includes('network error') || e.message.includes('NetworkError');
+        
+        if (!isHtmlResponse && !isNetworkError) {
+          throw e;
         }
       }
-    } catch (e: any) {
-      const isHtmlResponse = e.message === 'NOT_JSON_RESPONSE' || e instanceof SyntaxError || e.message.includes('Unexpected token') || e.message.includes('JSON');
-      const isNetworkError = e.message === 'Failed to fetch' || e.message.includes('network error') || e.message.includes('NetworkError');
-      
-      if (!isHtmlResponse && !isNetworkError) {
-        throw e;
-      }
-      
-      // Offline / GitHub Pages Serverless Mode:
-      // Fetch latest database.json directly from connected GitHub repository
+    }
+
+    // Offline / GitHub Pages Serverless Mode:
+    // Fetch latest database.json directly from connected GitHub repository
       const db = await this.getGitHubDatabase();
       let usersList = db?.users || JSON.parse(localStorage.getItem('SUGULE_LOCAL_USERS') || '[]');
       
@@ -1444,7 +1453,6 @@ class SuguleDatabaseManager {
       }
       
       return found;
-    }
   }
 
   public async registerUser(username: string, email: string, passport: string, nickname: string): Promise<any> {
@@ -1462,32 +1470,34 @@ class SuguleDatabaseManager {
 
     let apiSucceeded = false;
     let apiUserObj: any = null;
-    try {
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password: passport, nickname })
-      });
-      if (response.ok) {
-        apiUserObj = await response.json();
-        apiSucceeded = true;
-      } else {
-        try {
-          const err = await response.json();
-          throw new Error(err.error || 'Ошибка регистрации');
-        } catch (jsonErr: any) {
-          if (jsonErr.message && (jsonErr.message.includes('Unexpected token') || jsonErr.message.includes('JSON'))) {
-            throw new Error('NOT_JSON_RESPONSE');
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, email, password: passport, nickname })
+        });
+        if (response.ok) {
+          apiUserObj = await response.json();
+          apiSucceeded = true;
+        } else {
+          try {
+            const err = await response.json();
+            throw new Error(err.error || 'Ошибка регистрации');
+          } catch (jsonErr: any) {
+            if (jsonErr.message && (jsonErr.message.includes('Unexpected token') || jsonErr.message.includes('JSON'))) {
+              throw new Error('NOT_JSON_RESPONSE');
+            }
+            throw jsonErr;
           }
-          throw jsonErr;
         }
-      }
-    } catch (e: any) {
-      const isHtmlResponse = e.message === 'NOT_JSON_RESPONSE' || e instanceof SyntaxError || e.message.includes('Unexpected token') || e.message.includes('JSON');
-      const isNetworkError = e.message === 'Failed to fetch' || e.message.includes('network error') || e.message.includes('NetworkError');
-      
-      if (!isHtmlResponse && !isNetworkError) {
-        throw e;
+      } catch (e: any) {
+        const isHtmlResponse = e.message === 'NOT_JSON_RESPONSE' || e instanceof SyntaxError || e.message.includes('Unexpected token') || e.message.includes('JSON');
+        const isNetworkError = e.message === 'Failed to fetch' || e.message.includes('network error') || e.message.includes('NetworkError');
+        
+        if (!isHtmlResponse && !isNetworkError) {
+          throw e;
+        }
       }
     }
 
@@ -1530,18 +1540,20 @@ class SuguleDatabaseManager {
 
     let apiSucceeded = false;
     let apiProfileObj: any = null;
-    try {
-      const response = await fetch('/api/auth/update-profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, fields })
-      });
-      if (response.ok) {
-        apiProfileObj = await response.json();
-        apiSucceeded = true;
+    if (!this.isStaticEnv()) {
+      try {
+        const response = await fetch('/api/auth/update-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, fields })
+        });
+        if (response.ok) {
+          apiProfileObj = await response.json();
+          apiSucceeded = true;
+        }
+      } catch (e: any) {
+        // Continue to dual-mode / fallback
       }
-    } catch (e: any) {
-      // Continue to dual-mode / fallback
     }
 
     const { token } = this.getGitHubSettings();
